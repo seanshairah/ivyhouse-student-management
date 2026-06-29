@@ -34,7 +34,7 @@ export function StatsCounters({ stats }: { stats: SiteStats }) {
           viewport={revealViewport}
           className="max-w-2xl"
         >
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-sand-400">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-brand-300">
             Trusted by students
           </p>
           <h2 className="mt-3 font-display text-3xl font-bold uppercase leading-[0.95] tracking-tight sm:text-5xl">

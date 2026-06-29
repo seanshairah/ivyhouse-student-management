@@ -62,18 +62,18 @@ const config: Config = {
           800: "#1a1a18",
           900: "#0e0e0d",
         },
-        // Signature warm orange accent — the Dormesia-inspired highlight used
-        // for primary CTAs, badges, step icons and stat numbers. Kept on the
-        // `sand` key so existing accent references pick it up automatically.
+        // Accent ramp — kept monochrome (charcoal/ink) for a clean, minimal
+        // black-and-white look. Filled emphasis (400–600) reads as near-black;
+        // 50–100 are near-white surfaces.
         sand: {
-          50: "#fff4ed",
-          100: "#ffe3d2",
-          200: "#ffc6a5",
-          300: "#ff9e6b",
-          400: "#ff6b2c",
-          500: "#f4530f",
-          600: "#d23f06",
-          700: "#a3300a",
+          50: "#f6f6f5",
+          100: "#ececeb",
+          200: "#d9d9d6",
+          300: "#b0b0aa",
+          400: "#44443f",
+          500: "#33332e",
+          600: "#222220",
+          700: "#121211",
         },
       },
       borderRadius: {
