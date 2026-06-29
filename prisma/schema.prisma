@@ -1,0 +1,515 @@
+// ─────────────────────────────────────────────────────────────
+// Student Housing Management System — Prisma Schema
+// ─────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Enums ───────────────────────────
+
+enum UserRole {
+  OWNER
+  CARETAKER
+  STUDENT
+}
+
+enum RoomStatus {
+  AVAILABLE
+  PENDING_APPLICATION
+  RESERVED
+  OCCUPIED
+  MAINTENANCE
+  UNAVAILABLE
+}
+
+enum RoomType {
+  SINGLE
+  SHARED_DOUBLE
+  SHARED_TRIPLE
+  ENSUITE
+  STUDIO
+}
+
+enum ApplicationStatus {
+  NEW
+  AWAITING_REVIEW
+  APPROVED
+  REJECTED
+  PAYMENT_PENDING
+  PAID
+  MOVED_IN
+  CANCELLED
+}
+
+enum ApplicationType {
+  NEW
+  RENEWAL
+}
+
+enum StudentStatus {
+  PROSPECT
+  APPLICANT
+  ACTIVE
+  ARREARS
+  MOVED_OUT
+  ARCHIVED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  PAYNOW
+  CASH
+  BANK_TRANSFER
+  MANUAL
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  DASHBOARD
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+}
+
+enum ServiceRequestStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  CANCELLED
+}
+
+enum ServiceRequestPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ServiceRequestCategory {
+  MAINTENANCE
+  CLEANING
+  UTILITY
+  SECURITY
+  REPAIR
+  OTHER
+}
+
+enum AnnouncementAudience {
+  ALL
+  HOUSE
+  CARETAKERS
+  UNPAID
+  APPROVED
+  CUSTOM
+}
+
+// ─────────────────────────── Models ───────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  phone         String?
+  role          UserRole  @default(STUDENT)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  studentProfile StudentProfile?
+  caretaker      Caretaker?
+  auditLogs      AuditLog[]
+  sentMessages   MessageLog[]    @relation("MessageSender")
+  notifications  Notification[]
+}
+
+model House {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  tagline     String?
+  description String   @db.Text
+  location    String
+  imageUrl    String?
+  images      String[] @default([])
+  amenities   String[]
+  services    String[]
+  rules       String[]
+  safetyInfo  String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rooms          Room[]
+  students       StudentProfile[]
+  applications   Application[]
+  caretakers     Caretaker[]
+  serviceRequests ServiceRequest[]
+  announcements  Announcement[]
+}
+
+model Room {
+  id          String     @id @default(cuid())
+  houseId     String
+  house       House      @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  number      String
+  name        String?
+  type        RoomType   @default(SINGLE)
+  capacity    Int        @default(1)
+  occupied    Int        @default(0)
+  price       Decimal    @db.Decimal(10, 2)
+  status      RoomStatus @default(AVAILABLE)
+  floor       String?
+  description String?
+  amenities   String[]
+  images      String[]   @default([])
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  students     StudentProfile[]
+  applications Application[]
+
+  @@unique([houseId, number])
+  @@index([houseId, status])
+}
+
+model StudentProfile {
+  id              String        @id @default(cuid())
+  userId          String        @unique
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName        String
+  email           String
+  phone           String
+  nationalId      String?
+  age             Int?
+  gender          String?
+  institution     String?
+  program         String?
+  yearOfStudy     String?
+  status          StudentStatus @default(PROSPECT)
+
+  houseId         String?
+  house           House?        @relation(fields: [houseId], references: [id])
+  roomId          String?
+  room            Room?         @relation(fields: [roomId], references: [id])
+
+  moveInDate      DateTime?
+  leaseStart      DateTime?
+  leaseEnd        DateTime?
+
+  nextOfKinName   String?
+  nextOfKinPhone  String?
+  nextOfKinRelation String?
+  guardianName    String?
+  guardianPhone   String?
+
+  notes           String?       @db.Text
+  documents       String[]
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  applications Application[]
+  invoices     Invoice[]
+  payments     Payment[]
+  statements   Statement[]
+  serviceRequests ServiceRequest[]
+}
+
+model Application {
+  id                String            @id @default(cuid())
+  reference         String            @unique
+  type              ApplicationType   @default(NEW)
+  requestedTerm     String?
+  studentProfileId  String?
+  studentProfile    StudentProfile?   @relation(fields: [studentProfileId], references: [id])
+
+  // Applicant snapshot (also stored on the application directly for the public form)
+  fullName          String
+  email             String
+  phone             String
+  nationalId        String?
+  age               Int?
+  gender            String?
+  institution       String?
+  program           String?
+  yearOfStudy       String?
+
+  houseId           String
+  house             House             @relation(fields: [houseId], references: [id])
+  roomId            String?
+  room              Room?             @relation(fields: [roomId], references: [id])
+
+  nextOfKinName     String?
+  nextOfKinPhone    String?
+  nextOfKinRelation String?
+  guardianName      String?
+  guardianPhone     String?
+
+  specialNotes      String?           @db.Text
+  medicalNeeds      String?           @db.Text
+  agreedToTerms     Boolean           @default(false)
+
+  status            ApplicationStatus @default(NEW)
+  reviewNotes       String?           @db.Text
+  decidedAt         DateTime?
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  invoices Invoice[]
+
+  @@index([houseId, status])
+}
+
+model Invoice {
+  id               String         @id @default(cuid())
+  number           String         @unique
+  studentProfileId String
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id])
+  applicationId    String?
+  application      Application?   @relation(fields: [applicationId], references: [id])
+
+  description      String
+  amount           Decimal        @db.Decimal(10, 2)
+  amountPaid       Decimal        @default(0) @db.Decimal(10, 2)
+  status           InvoiceStatus  @default(DRAFT)
+  dueDate          DateTime?
+  issuedAt         DateTime       @default(now())
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  payments Payment[]
+}
+
+model Payment {
+  id               String         @id @default(cuid())
+  reference        String         @unique
+  studentProfileId String
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id])
+  invoiceId        String?
+  invoice          Invoice?       @relation(fields: [invoiceId], references: [id])
+
+  amount           Decimal        @db.Decimal(10, 2)
+  method           PaymentMethod  @default(PAYNOW)
+  status           PaymentStatus  @default(PENDING)
+  paymentLink      String?
+  paidAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  transaction PaymentTransaction?
+  receipt     Receipt?
+}
+
+model PaymentTransaction {
+  id            String   @id @default(cuid())
+  paymentId     String   @unique
+  payment       Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  provider      String   @default("paynow")
+  pollUrl       String?
+  providerRef   String?
+  rawStatus     String?
+  payload       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Receipt {
+  id          String   @id @default(cuid())
+  number      String   @unique
+  paymentId   String   @unique
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(10, 2)
+  issuedAt    DateTime @default(now())
+  createdAt   DateTime @default(now())
+}
+
+model Statement {
+  id               String         @id @default(cuid())
+  number           String         @unique
+  studentProfileId String
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id])
+  periodStart      DateTime
+  periodEnd        DateTime
+  totalDue         Decimal        @db.Decimal(10, 2)
+  totalPaid        Decimal        @db.Decimal(10, 2)
+  balance          Decimal        @db.Decimal(10, 2)
+  snapshot         Json?
+  createdAt        DateTime       @default(now())
+}
+
+model Caretaker {
+  id        String   @id @default(cuid())
+  userId    String?  @unique
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name      String
+  phone     String
+  email     String
+  role      String   @default("Caretaker")
+  houseId   String?
+  house     House?   @relation(fields: [houseId], references: [id])
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  serviceRequests ServiceRequest[]
+}
+
+model ServiceRequest {
+  id               String                 @id @default(cuid())
+  reference        String                 @unique
+  title            String
+  description      String                 @db.Text
+  category         ServiceRequestCategory @default(MAINTENANCE)
+  priority         ServiceRequestPriority @default(MEDIUM)
+  status           ServiceRequestStatus   @default(OPEN)
+
+  houseId          String?
+  house            House?                 @relation(fields: [houseId], references: [id])
+  studentProfileId String?
+  studentProfile   StudentProfile?        @relation(fields: [studentProfileId], references: [id])
+  caretakerId      String?
+  caretaker        Caretaker?             @relation(fields: [caretakerId], references: [id])
+
+  resolutionNotes  String?                @db.Text
+  resolvedAt       DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+}
+
+model Announcement {
+  id        String               @id @default(cuid())
+  title     String
+  body      String               @db.Text
+  audience  AnnouncementAudience @default(ALL)
+  houseId   String?
+  house     House?               @relation(fields: [houseId], references: [id])
+  channels  NotificationChannel[]
+  createdBy String?
+  createdAt DateTime             @default(now())
+}
+
+model MessageLog {
+  id          String              @id @default(cuid())
+  channel     NotificationChannel
+  recipient   String
+  recipientName String?
+  subject     String?
+  body        String              @db.Text
+  status      MessageStatus       @default(QUEUED)
+  provider    String?
+  error       String?
+  senderId    String?
+  sender      User?               @relation("MessageSender", fields: [senderId], references: [id])
+  // Optional relations for context
+  relatedType String?
+  relatedId   String?
+  createdAt   DateTime            @default(now())
+
+  @@index([channel, status])
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String?
+  user      User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  audience  UserRole?
+  title     String
+  body      String
+  channel   NotificationChannel @default(DASHBOARD)
+  type      String?
+  link      String?
+  isRead    Boolean             @default(false)
+  relatedType String?
+  relatedId   String?
+  createdAt DateTime            @default(now())
+
+  @@index([userId, isRead])
+}
+
+model EmailLog {
+  id        String        @id @default(cuid())
+  to        String
+  subject   String
+  template  String?
+  provider  String?
+  status    MessageStatus @default(QUEUED)
+  error     String?
+  createdAt DateTime      @default(now())
+}
+
+model SmsLog {
+  id        String        @id @default(cuid())
+  to        String
+  body      String
+  provider  String?
+  status    MessageStatus @default(QUEUED)
+  error     String?
+  createdAt DateTime      @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  actorEmail String?
+  action     String
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+}
+
+model Settings {
+  id                String   @id @default("singleton")
+  businessName      String   @default("Student Housing Co.")
+  ownerName         String   @default("House Owner")
+  ownerEmail        String   @default("owner@studenthousing.local")
+  ownerPhone        String?
+  currency          String   @default("USD")
+  invoicePrefix     String   @default("INV")
+  receiptPrefix     String   @default("RCT")
+  statementPrefix   String   @default("STM")
+  invoiceCounter    Int      @default(1000)
+  receiptCounter    Int      @default(1000)
+  statementCounter  Int      @default(1000)
+  paymentTermsDays  Int      @default(7)
+  defaultMessage    String?
+  notifyByEmail     Boolean  @default(true)
+  notifyBySms       Boolean  @default(true)
+  updatedAt         DateTime @updatedAt
+}
