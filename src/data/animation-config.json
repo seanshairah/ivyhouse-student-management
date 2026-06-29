@@ -1,0 +1,93 @@
+{
+  "animationSystem": {
+    "inspiration": "Animmaster Lib",
+    "preferredLibraries": ["Framer Motion", "CSS transitions"],
+    "optionalLibraries": ["GSAP only if truly needed"],
+    "globalRules": {
+      "performanceFirst": true,
+      "respectReducedMotion": true,
+      "mobileOptimized": true,
+      "avoidExcessiveMotion": true,
+      "animationsMustSupportUX": true,
+      "noAnimationShouldBlockUsability": true
+    },
+    "sections": {
+      "hero": {
+        "animationType": "text-reveal-and-soft-background-motion",
+        "trigger": "page-load",
+        "duration": "700ms",
+        "easing": "ease-out",
+        "effects": [
+          "headline fades upward",
+          "CTA buttons slide in subtly",
+          "background gradient blobs move slowly",
+          "house preview card floats gently"
+        ],
+        "mobileBehavior": "reduce movement and keep animations shorter",
+        "reducedMotionFallback": "simple fade-in"
+      },
+      "houseShowcase": {
+        "animationType": "scroll-reveal-card-stack",
+        "trigger": "on-scroll",
+        "duration": "500ms",
+        "stagger": "120ms",
+        "effects": [
+          "cards fade in",
+          "cards rise from 24px below",
+          "hover lift",
+          "room availability badge pulses subtly"
+        ],
+        "mobileBehavior": "single-column reveal with minimal movement",
+        "reducedMotionFallback": "static cards with opacity transition"
+      },
+      "houseComparison": {
+        "animationType": "interactive-comparison-cards",
+        "trigger": "scroll-and-hover",
+        "duration": "500ms",
+        "effects": [
+          "comparison cards reveal side by side",
+          "hover highlights selected house",
+          "amenity differences animate softly"
+        ],
+        "mobileBehavior": "stacked comparison cards",
+        "reducedMotionFallback": "static comparison layout"
+      },
+      "howItWorks": {
+        "animationType": "interactive-timeline",
+        "trigger": "on-scroll",
+        "duration": "600ms",
+        "effects": [
+          "timeline line draws vertically",
+          "steps reveal one by one",
+          "active step highlights on hover"
+        ],
+        "mobileBehavior": "vertical step cards",
+        "reducedMotionFallback": "static timeline"
+      },
+      "bookingForm": {
+        "animationType": "multi-step-form-microinteractions",
+        "trigger": "user-interaction",
+        "effects": [
+          "step transitions slide softly",
+          "selected room card scales slightly",
+          "validation errors shake gently",
+          "success state uses checkmark animation"
+        ],
+        "mobileBehavior": "short transitions with no layout jump",
+        "reducedMotionFallback": "instant step change with fade"
+      },
+      "faq": {
+        "animationType": "accordion-expand-collapse",
+        "trigger": "click",
+        "duration": "250ms",
+        "effects": [
+          "answer height animates smoothly",
+          "icon rotates",
+          "active item gets subtle background"
+        ],
+        "mobileBehavior": "same behavior but compact",
+        "reducedMotionFallback": "instant open/close"
+      }
+    }
+  }
+}
