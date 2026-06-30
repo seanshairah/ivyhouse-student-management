@@ -79,7 +79,9 @@ export function StudentActions({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Contact student</DialogTitle>
-            <DialogDescription>Sends via email and SMS.</DialogDescription>
+            <DialogDescription>
+              Choose how to reach this student — email, SMS, or both.
+            </DialogDescription>
           </DialogHeader>
           <form
             action={(fd) => wrap(() => contactStudent(fd), "Message sent", () => setContactOpen(false))}
@@ -87,9 +89,16 @@ export function StudentActions({
           >
             <input type="hidden" name="studentProfileId" value={studentProfileId} />
             <input type="hidden" name="target" value="student" />
-            <input type="hidden" name="channels" value="EMAIL,SMS" />
             <div className="space-y-1.5">
-              <Label htmlFor="subject">Subject</Label>
+              <Label htmlFor="channels">Send via</Label>
+              <Select id="channels" name="channels" defaultValue="EMAIL,SMS">
+                <option value="EMAIL,SMS">Email &amp; SMS</option>
+                <option value="EMAIL">Email only</option>
+                <option value="SMS">SMS only</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="subject">Subject (email)</Label>
               <Input id="subject" name="subject" placeholder="Subject" />
             </div>
             <div className="space-y-1.5">
