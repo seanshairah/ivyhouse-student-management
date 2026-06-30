@@ -30,11 +30,15 @@ export function StatCard({
 }: StatCardProps) {
   const Icon = Icons[icon] as React.ComponentType<{ className?: string }>;
   return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-muted-foreground">{label}</p>
-          <p className="mt-1.5 font-display text-2xl font-bold tracking-tight">{value}</p>
+    <Card className="p-4 sm:p-5">
+      <div className="flex items-start justify-between gap-2 sm:gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium leading-tight text-muted-foreground sm:text-sm">
+            {label}
+          </p>
+          <p className="mt-1.5 font-display text-xl font-bold tracking-tight sm:text-2xl">
+            {value}
+          </p>
           {hint && <p className="mt-1 truncate text-xs text-muted-foreground">{hint}</p>}
           {trend && (
             <p
@@ -54,11 +58,11 @@ export function StatCard({
         </div>
         <div
           className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-xl",
+            "flex size-9 shrink-0 items-center justify-center rounded-xl sm:size-11",
             ACCENTS[accent],
           )}
         >
-          {Icon && <Icon className="size-5" />}
+          {Icon && <Icon className="size-4 sm:size-5" />}
         </div>
       </div>
     </Card>
