@@ -6,7 +6,7 @@ import { FloatingBookCta } from "@/components/marketing/floating-cta";
 /** Server shell wrapping marketing pages with nav, footer and floating CTA. */
 export function SiteShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col bg-[#0c1110] text-white antialiased">
       <SiteNav />
       <main className="flex-1">{children}</main>
       <SiteFooter />

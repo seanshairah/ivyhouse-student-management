@@ -28,8 +28,8 @@ export default async function HousesPage() {
   return (
     <SiteShell>
       <section className="container pb-8 pt-12 sm:pt-20">
-        <div className="border-b border-border pb-6">
-          <span className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+        <div className="border-b border-white/10 pb-6">
+          <span className="text-xs font-medium uppercase tracking-[0.2em] text-white/60">
             The residence
           </span>
         </div>
@@ -37,7 +37,7 @@ export default async function HousesPage() {
           <h1 className="max-w-3xl text-balance font-display text-5xl font-extrabold uppercase leading-[0.95] tracking-tight sm:text-6xl lg:text-7xl">
             Find the right room for you.
           </h1>
-          <p className="text-lg leading-relaxed text-muted-foreground">
+          <p className="text-lg leading-relaxed text-white/60">
             Ivy House is fully serviced and secure. Explore the amenities and
             live room availability below.
           </p>
@@ -71,12 +71,12 @@ export default async function HousesPage() {
                     sizes="(max-width: 1024px) 100vw, 50vw"
                     className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
                   />
-                  <span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-background/90 px-3 py-1 text-xs font-medium backdrop-blur">
+                  <span className="absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white backdrop-blur">
                     <span
                       className={
                         available.length > 0
-                          ? "size-1.5 rounded-full bg-sand-400"
-                          : "size-1.5 rounded-full bg-brand-300"
+                          ? "size-1.5 rounded-full bg-amber-400"
+                          : "size-1.5 rounded-full bg-white/40"
                       }
                     />
                     {available.length > 0
@@ -92,16 +92,16 @@ export default async function HousesPage() {
                     {house.name}
                   </h2>
                   {house.tagline && (
-                    <p className="mt-3 text-lg text-muted-foreground">
+                    <p className="mt-3 text-lg text-white/60">
                       {house.tagline}
                     </p>
                   )}
-                  <p className="mt-3 flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <MapPin className="size-4 shrink-0 text-sand-400" />
+                  <p className="mt-3 flex items-center gap-1.5 text-sm text-white/60">
+                    <MapPin className="size-4 shrink-0 text-amber-400" />
                     {house.location}
                   </p>
 
-                  <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
+                  <p className="mt-5 text-sm leading-relaxed text-white/60">
                     {house.description}
                   </p>
 
@@ -110,34 +110,34 @@ export default async function HousesPage() {
                       {house.amenities.slice(0, 6).map((a) => (
                         <li
                           key={a}
-                          className="flex items-center gap-2 text-sm text-foreground/80"
+                          className="flex items-center gap-2 text-sm text-white/80"
                         >
-                          <Check className="size-4 shrink-0 text-sand-400" />
+                          <Check className="size-4 shrink-0 text-amber-400" />
                           {a}
                         </li>
                       ))}
                     </ul>
                   )}
 
-                  <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-6">
+                  <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-6">
                     <div className="flex items-baseline gap-1.5">
-                      <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                      <span className="text-xs uppercase tracking-wider text-white/60">
                         From
                       </span>
                       <span className="font-display text-3xl font-light">
                         {formatCurrency(priceFrom)}
                       </span>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-white/60">
                         / month
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      <Button asChild variant="outline" className="rounded-full">
+                      <Button asChild variant="glass" className="rounded-full">
                         <Link href={`/houses/${house.slug}`}>
                           View details
                         </Link>
                       </Button>
-                      <Button asChild variant="accent" className="rounded-full">
+                      <Button asChild variant="white" className="rounded-full">
                         <Link href={`/book?house=${house.slug}`}>
                           Book
                           <ArrowUpRight className="size-4" />

@@ -2,10 +2,9 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { motion, useReducedMotion } from "framer-motion";
-import { ArrowRight, MapPin, CalendarDays, Wallet, Search } from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatCurrency } from "@/lib/utils";
 import { fadeUp, staggerContainer } from "@/lib/animation-config";
 
 export interface HeroHouse {
@@ -17,187 +16,133 @@ export interface HeroHouse {
   availableRooms: number;
 }
 
+const HERO_BG =
+  "https://images.unsplash.com/photo-1518780664697-55e3ad937233?auto=format&fit=crop&w=2000&q=80";
+
+const AVATARS = ["RC", "TD", "NM", "BS"];
+
 export function Hero({
   house,
-  priceFrom,
+  studentsHoused,
 }: {
   house: HeroHouse;
-  priceFrom: number;
+  studentsHoused: number;
 }) {
-  const reduce = useReducedMotion();
-
   return (
-    <section className="relative overflow-hidden">
-      <div className="container pb-12 pt-8 sm:pb-16 sm:pt-12">
-        {/* Top label row */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.6 }}
-          className="flex items-center justify-between border-b border-border pb-6"
-        >
-          <span className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-            Student residence · Chinhoyi
-          </span>
-          <span className="hidden text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground sm:inline">
-            Beside the CUT main campus
-          </span>
-        </motion.div>
+    <section className="px-3 pb-8 pt-2 sm:px-5 sm:pb-12">
+      <div className="relative isolate overflow-hidden rounded-[1.75rem] border border-white/10 sm:rounded-[2.25rem]">
+        <Image
+          src={HERO_BG}
+          alt={`${house.name} — student residence in Chinhoyi`}
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover"
+        />
+        {/* Scrims for legible text */}
+        <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/55 to-black/25" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40" />
 
-        {/* Editorial headline */}
-        <motion.div
-          variants={staggerContainer}
-          initial="hidden"
-          animate="show"
-          className="grid gap-8 pt-10 sm:pt-14 lg:grid-cols-[1.55fr_1fr] lg:items-end"
-        >
-          <motion.h1
-            variants={fadeUp}
-            className="font-display text-[3.25rem] font-extrabold uppercase leading-[0.92] tracking-tight sm:text-7xl lg:text-[6.25rem]"
+        <div className="relative z-10 flex min-h-[34rem] flex-col justify-between p-6 sm:min-h-[42rem] sm:p-10 lg:min-h-[44rem] lg:p-14">
+          {/* Headline */}
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="show"
+            className="max-w-3xl pt-10 sm:pt-16"
           >
-            Student
-            <br />
-            living at{" "}
-            <span className="text-accent-gradient">Ivy House</span>
-          </motion.h1>
-
-          <motion.p
-            variants={fadeUp}
-            className="max-w-sm text-pretty text-base leading-relaxed text-muted-foreground sm:text-lg"
-          >
-            Secure, verified rooms a 6-minute walk from the Chinhoyi University
-            of Technology main campus — fast Wi-Fi, backup power and on-site
-            care, all booked online.
-          </motion.p>
-        </motion.div>
-
-        {/* Search / filter bar */}
-        <motion.form
-          action="/book"
-          method="get"
-          variants={fadeUp}
-          initial="hidden"
-          animate="show"
-          className="mt-9 grid gap-3 rounded-[1.4rem] border border-border bg-card p-3 shadow-sm sm:mt-12 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end sm:rounded-full sm:p-2.5 sm:pl-5"
-        >
-          <Field icon={MapPin} label="Location">
-            <input
-              name="q"
-              defaultValue="Chinhoyi, near CUT"
-              className="w-full bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
-            />
-          </Field>
-          <Field icon={CalendarDays} label="Move-in" className="sm:border-l sm:border-border sm:pl-5">
-            <input
-              name="movein"
-              type="text"
-              onFocus={(e) => (e.currentTarget.type = "date")}
-              placeholder="Choose a date"
-              className="w-full bg-transparent text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground"
-            />
-          </Field>
-          <Field icon={Wallet} label="Budget" className="sm:border-l sm:border-border sm:pl-5">
-            <select
-              name="budget"
-              defaultValue=""
-              className="w-full cursor-pointer bg-transparent text-sm font-medium text-foreground outline-none"
+            <motion.h1
+              variants={fadeUp}
+              className="font-display text-[2.7rem] uppercase leading-[0.95] tracking-tight text-white sm:text-6xl lg:text-7xl"
             >
-              <option value="">Any budget</option>
-              <option value="150">Up to $150 / mo</option>
-              <option value="200">Up to $200 / mo</option>
-              <option value="300">Up to $300 / mo</option>
-            </select>
-          </Field>
-          <Button type="submit" variant="accent" size="lg" className="rounded-full">
-            <Search className="size-4" />
-            Discover
-          </Button>
-        </motion.form>
+              <span className="block font-extrabold">Student living,</span>
+              <span className="block font-light">shaped for focus</span>
+            </motion.h1>
+            <motion.p
+              variants={fadeUp}
+              className="mt-6 max-w-md text-base leading-relaxed text-white/75 sm:text-lg"
+            >
+              Secure, verified rooms a 6-minute walk from the CUT main campus —
+              built with comfort, clarity, and care.
+            </motion.p>
+            <motion.div variants={fadeUp} className="mt-8 flex flex-wrap items-center gap-3">
+              <Button asChild size="lg" variant="white" className="rounded-full">
+                <Link href="/book">
+                  Book a room
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="glass" className="rounded-full">
+                <Link href="/houses">
+                  Explore the house
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+            </motion.div>
+          </motion.div>
 
-        {/* Large hero image with floating label cards */}
-        <motion.div
-          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 32 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-          className="relative mt-12 sm:mt-16"
-        >
-          <div className="relative aspect-[4/5] w-full overflow-hidden rounded-3xl sm:aspect-[16/9]">
-            <Image
-              src={house.imageUrl}
-              alt={`Interior of ${house.name}`}
-              fill
-              priority
-              sizes="100vw"
-              className="object-cover"
-            />
-          </div>
-
-          {/* Floating availability card */}
-          <div className="absolute left-4 top-4 rounded-2xl border border-border bg-background/90 px-4 py-3 backdrop-blur sm:left-6 sm:top-6">
-            <p className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-muted-foreground">
-              <span className="size-1.5 rounded-full bg-sand-400" />
-              Now leasing
-            </p>
-            <p className="mt-0.5 font-display text-base font-semibold">
-              Rooms from {formatCurrency(priceFrom)} / mo
-            </p>
-          </div>
-
-          {/* Floating CTA + inset card */}
-          <div className="absolute -bottom-6 right-4 hidden w-52 overflow-hidden rounded-2xl border border-border bg-card shadow-xl shadow-brand-900/10 sm:block lg:w-60">
-            <div className="relative aspect-[4/3] w-full">
-              <Image
-                src={house.insetImage}
-                alt="Communal study lounge"
-                fill
-                sizes="240px"
-                className="object-cover"
-              />
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-3">
-              <div>
-                <p className="text-xs uppercase tracking-wider text-muted-foreground">
-                  {house.availableRooms} rooms open
-                </p>
-                <p className="text-sm font-medium">Book a viewing</p>
+          {/* Bottom cluster */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1], delay: 0.3 }}
+            className="flex flex-col items-start justify-between gap-6 pt-10 sm:flex-row sm:items-end"
+          >
+            {/* Avatars + stat */}
+            <div>
+              <div className="flex items-center gap-3">
+                <div className="flex -space-x-3">
+                  {AVATARS.map((a, i) => (
+                    <span
+                      key={a}
+                      className="grid size-9 place-items-center rounded-full border-2 border-[#0c1110] bg-white/15 text-[0.7rem] font-semibold text-white ring-1 ring-white/20 backdrop-blur"
+                      style={{ zIndex: AVATARS.length - i }}
+                    >
+                      {a}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <Link
-                href="/book"
-                aria-label="Book a room"
-                className="grid size-9 place-items-center rounded-full bg-sand-400 text-white transition-colors hover:bg-sand-500"
-              >
-                <ArrowRight className="size-4" />
-              </Link>
+              <div className="mt-4 flex items-end gap-3">
+                <span className="font-display text-4xl font-extrabold text-white sm:text-5xl">
+                  {studentsHoused}+
+                </span>
+                <span className="pb-1 text-sm leading-tight text-white/70">
+                  Trusted by
+                  <br />
+                  happy students
+                </span>
+              </div>
+              <div className="mt-3 h-px w-48 max-w-full bg-white/20" />
             </div>
-          </div>
-        </motion.div>
+
+            {/* Discover card */}
+            <Link
+              href="/houses"
+              className="group flex w-full max-w-sm items-center gap-4 rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur-md transition-colors hover:bg-white/15 sm:w-auto"
+            >
+              <span className="relative size-16 shrink-0 overflow-hidden rounded-xl">
+                <Image
+                  src={house.insetImage}
+                  alt={house.name}
+                  fill
+                  sizes="64px"
+                  className="object-cover"
+                />
+              </span>
+              <span className="min-w-0">
+                <span className="block font-display text-sm font-semibold italic text-white">
+                  Discover the rooms at {house.name}.
+                </span>
+                <span className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-white/80 underline-offset-4 group-hover:underline">
+                  View rooms
+                  <ArrowRight className="size-3.5" />
+                </span>
+              </span>
+            </Link>
+          </motion.div>
+        </div>
       </div>
     </section>
-  );
-}
-
-function Field({
-  icon: Icon,
-  label,
-  className = "",
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className={`flex items-center gap-3 rounded-2xl px-3 py-2 sm:rounded-none sm:px-0 sm:py-1 ${className}`}>
-      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground">
-        <Icon className="size-4" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          {label}
-        </span>
-        {children}
-      </span>
-    </label>
   );
 }

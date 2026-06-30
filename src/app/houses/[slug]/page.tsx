@@ -75,9 +75,9 @@ export default async function HouseDetailPage({
     <SiteShell>
       {/* Header */}
       <section className="container pt-12 sm:pt-16">
-        <div className="flex flex-col gap-3 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-3 border-b border-white/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <span className="text-xs uppercase tracking-wider text-muted-foreground">
+            <span className="text-xs uppercase tracking-wider text-white/60">
               {availableRooms.length > 0
                 ? `${availableRooms.length} room${
                     availableRooms.length === 1 ? "" : "s"
@@ -88,13 +88,13 @@ export default async function HouseDetailPage({
               {house.name}
             </h1>
             {house.tagline && (
-              <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+              <p className="mt-3 max-w-2xl text-lg text-white/60">
                 {house.tagline}
               </p>
             )}
           </div>
-          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <MapPin className="size-4 shrink-0 text-sand-400" />
+          <p className="flex items-center gap-1.5 text-sm text-white/60">
+            <MapPin className="size-4 shrink-0 text-amber-400" />
             {house.location}
           </p>
         </div>
@@ -110,40 +110,40 @@ export default async function HouseDetailPage({
           {/* Main content */}
           <div className="space-y-12">
             <div>
-              <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
+              <h2 className="text-xs uppercase tracking-wider text-white/60">
                 About {house.name}
               </h2>
-              <p className="mt-4 max-w-2xl text-lg leading-relaxed text-foreground/80">
+              <p className="mt-4 max-w-2xl text-lg leading-relaxed text-white/80">
                 {house.description}
               </p>
             </div>
 
             {/* Amenities & services */}
-            <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
+            <div className="grid gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 sm:grid-cols-2">
               {house.amenities.length > 0 && (
                 <InfoList
-                  icon={<Check className="size-4 text-foreground" strokeWidth={1.5} />}
+                  icon={<Check className="size-4 text-white" strokeWidth={1.5} />}
                   title="Amenities"
                   items={house.amenities}
                 />
               )}
               {house.services.length > 0 && (
                 <InfoList
-                  icon={<Wrench className="size-4 text-foreground" strokeWidth={1.5} />}
+                  icon={<Wrench className="size-4 text-white" strokeWidth={1.5} />}
                   title="Services"
                   items={house.services}
                 />
               )}
               {house.safetyInfo.length > 0 && (
                 <InfoList
-                  icon={<ShieldCheck className="size-4 text-foreground" strokeWidth={1.5} />}
+                  icon={<ShieldCheck className="size-4 text-white" strokeWidth={1.5} />}
                   title="Safety"
                   items={house.safetyInfo}
                 />
               )}
               {house.rules.length > 0 && (
                 <InfoList
-                  icon={<ScrollText className="size-4 text-foreground" strokeWidth={1.5} />}
+                  icon={<ScrollText className="size-4 text-white" strokeWidth={1.5} />}
                   title="House rules"
                   items={house.rules}
                 />
@@ -153,16 +153,16 @@ export default async function HouseDetailPage({
             {/* Room types */}
             {roomTypes.length > 0 && (
               <div>
-                <h3 className="text-xs uppercase tracking-wider text-muted-foreground">
+                <h3 className="text-xs uppercase tracking-wider text-white/60">
                   Room types
                 </h3>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {roomTypes.map((t) => (
                     <span
                       key={t}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-border px-3.5 py-1.5 text-sm"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3.5 py-1.5 text-sm"
                     >
-                      <BedDouble className="size-4 text-sand-400" />
+                      <BedDouble className="size-4 text-amber-400" />
                       {ROOM_TYPE_LABELS[t] ?? t}
                     </span>
                   ))}
@@ -172,11 +172,11 @@ export default async function HouseDetailPage({
 
             {/* Available rooms list */}
             <div>
-              <h3 className="text-xs uppercase tracking-wider text-muted-foreground">
+              <h3 className="text-xs uppercase tracking-wider text-white/60">
                 Available rooms
               </h3>
               {availableRooms.length === 0 ? (
-                <p className="mt-4 rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+                <p className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] p-8 text-center text-sm text-white/60">
                   All rooms are currently taken. Check back soon or contact us
                   to join the waitlist.
                 </p>
@@ -185,26 +185,26 @@ export default async function HouseDetailPage({
                   {availableRooms.map((room) => (
                     <div
                       key={room.id}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card p-5 transition-colors hover:bg-brand-50/60"
+                      className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-5 transition-colors hover:bg-white/[0.04]"
                     >
                       <div>
                         <p className="font-medium">
                           Room {room.number}
                           {room.name ? ` · ${room.name}` : ""}
                         </p>
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-white/60">
                           {ROOM_TYPE_LABELS[room.type] ?? room.type}
                           {room.floor ? ` · ${room.floor} floor` : ""}
                         </p>
                         <p className="mt-2 font-display text-lg font-semibold">
                           {formatCurrency(toNumber(room.price))}
-                          <span className="text-xs font-normal text-muted-foreground">
+                          <span className="text-xs font-normal text-white/60">
                             {" "}
                             / month
                           </span>
                         </p>
                       </div>
-                      <Button asChild size="sm" className="rounded-full">
+                      <Button asChild size="sm" variant="white" className="rounded-full">
                         <Link
                           href={`/book?house=${house.slug}&room=${room.id}`}
                         >
@@ -220,14 +220,14 @@ export default async function HouseDetailPage({
 
           {/* Sticky sidebar CTA */}
           <aside className="lg:sticky lg:top-28 lg:self-start">
-            <div className="overflow-hidden rounded-2xl border border-border bg-card">
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
               <div className="bg-brand-900 p-6 text-brand-50">
-                <p className="text-xs uppercase tracking-wider text-brand-300">
+                <p className="text-xs uppercase tracking-wider text-white/40">
                   From
                 </p>
                 <p className="mt-1 font-display text-3xl font-light">
                   {formatCurrency(priceFrom)}
-                  <span className="text-sm font-normal text-brand-300">
+                  <span className="text-sm font-normal text-white/40">
                     {" "}
                     / month
                   </span>
@@ -235,22 +235,22 @@ export default async function HouseDetailPage({
               </div>
               <div className="space-y-4 p-6">
                 <dl className="space-y-2 text-sm">
-                  <div className="flex items-center justify-between border-b border-border pb-2">
-                    <dt className="text-muted-foreground">Total rooms</dt>
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <dt className="text-white/60">Total rooms</dt>
                     <dd className="font-medium">{house.rooms.length}</dd>
                   </div>
                   <div className="flex items-center justify-between">
-                    <dt className="text-muted-foreground">Available now</dt>
+                    <dt className="text-white/60">Available now</dt>
                     <dd className="font-medium">{availableRooms.length}</dd>
                   </div>
                 </dl>
-                <Button asChild className="w-full rounded-full" size="lg">
+                <Button asChild variant="white" className="w-full rounded-full" size="lg">
                   <Link href={`/book?house=${house.slug}`}>
                     Book a room
                     <ArrowRight className="size-4" />
                   </Link>
                 </Button>
-                <Button asChild variant="outline" className="w-full rounded-full">
+                <Button asChild variant="glass" className="w-full rounded-full">
                   <Link href="/houses">Back to all houses</Link>
                 </Button>
               </div>
@@ -272,8 +272,8 @@ function InfoList({
   items: string[];
 }) {
   return (
-    <div className="bg-card p-6">
-      <h3 className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+    <div className="bg-white/[0.04] p-6">
+      <h3 className="flex items-center gap-2 text-xs uppercase tracking-wider text-white/60">
         {icon}
         {title}
       </h3>
@@ -281,9 +281,9 @@ function InfoList({
         {items.map((item) => (
           <li
             key={item}
-            className="flex items-start gap-2 text-sm text-foreground/80"
+            className="flex items-start gap-2 text-sm text-white/80"
           >
-            <Check className="mt-0.5 size-4 shrink-0 text-sand-400" />
+            <Check className="mt-0.5 size-4 shrink-0 text-amber-400" />
             {item}
           </li>
         ))}
