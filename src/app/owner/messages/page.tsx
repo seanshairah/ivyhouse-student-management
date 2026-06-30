@@ -47,7 +47,7 @@ export default async function OwnerMessagesPage() {
         description="Send bulk messages to students and caretakers, and review delivery logs."
       />
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
         <StatCard label="Messages sent" value={sent} icon="Send" accent="emerald" />
         <StatCard label="Total logged" value={total} icon="MessageSquare" accent="brand" />
         <StatCard label="Failed" value={failed} icon="AlertTriangle" accent="rose" />
