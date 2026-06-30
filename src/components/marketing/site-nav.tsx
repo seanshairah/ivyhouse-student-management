@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Menu, X } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Menu, X, Home as HomeIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const LINKS = [
+  { label: "Home", href: "/" },
   { label: "The House", href: "/houses" },
   { label: "How it works", href: "/#how-it-works" },
   { label: "FAQs", href: "/#faqs" },
@@ -17,6 +19,7 @@ const LINKS = [
 export function SiteNav() {
   const [open, setOpen] = React.useState(false);
   const [scrolled, setScrolled] = React.useState(false);
+  const pathname = usePathname();
 
   React.useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -25,7 +28,6 @@ export function SiteNav() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Lock scroll when mobile menu open
   React.useEffect(() => {
     document.body.style.overflow = open ? "hidden" : "";
     return () => {
@@ -33,50 +35,62 @@ export function SiteNav() {
     };
   }, [open]);
 
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href.split("#")[0]);
+
   return (
     <header
       className={cn(
         "sticky top-0 z-50 w-full transition-all duration-300",
         scrolled
-          ? "border-b border-border bg-background/95"
+          ? "border-b border-white/10 bg-[#0c1110]/80 backdrop-blur-xl"
           : "border-b border-transparent bg-transparent",
       )}
     >
       <nav className="container flex h-16 items-center justify-between gap-4 sm:h-20">
+        {/* Logo */}
         <Link
           href="/"
           className="flex items-center gap-2.5"
           onClick={() => setOpen(false)}
         >
-          <span className="grid size-8 place-items-center rounded-lg bg-sand-400 font-display text-sm font-extrabold text-white">
-            I
+          <span className="grid size-9 place-items-center rounded-xl bg-white/10 ring-1 ring-white/15">
+            <HomeIcon className="size-5 text-white" />
           </span>
-          <span className="font-display text-xl font-extrabold uppercase tracking-tight text-foreground">
+          <span className="font-display text-xl font-bold tracking-tight text-white">
             Ivy House
           </span>
         </Link>
 
         {/* Desktop links */}
         <div className="hidden items-center gap-8 lg:flex">
-          {LINKS.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              className="text-sm text-foreground/70 transition-colors hover:text-foreground"
-            >
-              {l.label}
-            </Link>
-          ))}
+          {LINKS.map((l) => {
+            const active = isActive(l.href);
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                className={cn(
+                  "text-sm transition-colors",
+                  active
+                    ? "font-semibold text-amber-400"
+                    : "text-white/70 hover:text-white",
+                )}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
         </div>
 
         <div className="hidden items-center gap-3 lg:flex">
           <Link
             href="/auth/login"
-            className="text-sm text-foreground/70 transition-colors hover:text-foreground"
+            className="text-sm text-white/70 transition-colors hover:text-white"
           >
             Sign in
           </Link>
-          <Button asChild size="sm" variant="accent" className="rounded-full">
+          <Button asChild size="sm" variant="white" className="rounded-full px-5">
             <Link href="/book">Book a room</Link>
           </Button>
         </div>
@@ -87,7 +101,7 @@ export function SiteNav() {
           aria-label={open ? "Close menu" : "Open menu"}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="grid size-10 place-items-center rounded-full border border-border bg-white/70 lg:hidden"
+          className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/10 text-white lg:hidden"
         >
           {open ? <X className="size-5" /> : <Menu className="size-5" />}
         </button>
@@ -96,13 +110,13 @@ export function SiteNav() {
       {/* Mobile menu */}
       {open && (
         <div className="lg:hidden">
-          <div className="container space-y-1 border-t border-border bg-background pb-6 pt-3">
+          <div className="container space-y-1 border-t border-white/10 bg-[#0c1110] pb-6 pt-3">
             {LINKS.map((l) => (
               <Link
                 key={l.href}
                 href={l.href}
                 onClick={() => setOpen(false)}
-                className="block rounded-xl px-3 py-3 text-base text-foreground/90 transition-colors hover:bg-accent"
+                className="block rounded-xl px-3 py-3 text-base text-white/90 transition-colors hover:bg-white/5"
               >
                 {l.label}
               </Link>
@@ -110,7 +124,7 @@ export function SiteNav() {
             <div className="flex flex-col gap-2 pt-3">
               <Button
                 asChild
-                variant="outline"
+                variant="glass"
                 className="rounded-full"
                 onClick={() => setOpen(false)}
               >
@@ -118,7 +132,7 @@ export function SiteNav() {
               </Button>
               <Button
                 asChild
-                variant="accent"
+                variant="white"
                 className="rounded-full"
                 onClick={() => setOpen(false)}
               >

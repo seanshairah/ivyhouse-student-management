@@ -38,7 +38,7 @@ const PILLARS = [
 
 export function WhyIvy() {
   return (
-    <section className="border-y border-border bg-secondary py-20 sm:py-28">
+    <section className="border-t border-white/10 py-20 sm:py-28">
       <div className="container">
         <motion.div
           variants={fadeUp}
@@ -47,13 +47,13 @@ export function WhyIvy() {
           viewport={revealViewport}
           className="max-w-2xl"
         >
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber-400">
             Why Ivy House
           </p>
-          <h2 className="mt-3 font-display text-3xl font-bold uppercase tracking-tight sm:text-5xl">
+          <h2 className="mt-3 font-display text-3xl font-bold uppercase tracking-tight text-white sm:text-5xl">
             Everything a student needs to thrive.
           </h2>
-          <p className="mt-4 text-muted-foreground">
+          <p className="mt-4 text-white/60">
             A safe, engaging and community-oriented residence — so you can
             concentrate on what really counts.
           </p>
@@ -72,20 +72,20 @@ export function WhyIvy() {
               <motion.div
                 key={p.title}
                 variants={fadeUp}
-                className="group flex flex-col rounded-2xl border border-border bg-card p-6 transition-shadow hover:shadow-md"
+                className="group flex flex-col rounded-2xl border border-white/10 bg-white/[0.04] p-6 transition-colors hover:bg-white/[0.07]"
               >
-                <span className="grid size-12 place-items-center rounded-full bg-sand-400 text-white shadow-sm shadow-sand-400/30">
+                <span className="grid size-12 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/15">
                   <Icon className="size-5" />
                 </span>
-                <h3 className="mt-5 font-display text-lg font-semibold leading-snug">
+                <h3 className="mt-5 font-display text-lg font-semibold leading-snug text-white">
                   {p.title}
                 </h3>
-                <p className="mt-2 flex-1 text-sm leading-relaxed text-muted-foreground">
+                <p className="mt-2 flex-1 text-sm leading-relaxed text-white/60">
                   {p.description}
                 </p>
                 <Link
                   href={p.href}
-                  className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-sand-500 transition-all hover:gap-2"
+                  className="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-amber-400 transition-all hover:gap-2"
                 >
                   Learn more →
                 </Link>

@@ -25,7 +25,7 @@ export function StatsCounters({ stats }: { stats: SiteStats }) {
   ];
 
   return (
-    <section className="bg-brand-900 text-brand-50">
+    <section className="border-y border-white/10 bg-white/[0.02] text-white">
       <div className="container py-16 sm:py-20">
         <motion.div
           variants={fadeUp}
@@ -34,7 +34,7 @@ export function StatsCounters({ stats }: { stats: SiteStats }) {
           viewport={revealViewport}
           className="max-w-2xl"
         >
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-brand-300">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-amber-400">
             Trusted by students
           </p>
           <h2 className="mt-3 font-display text-3xl font-bold uppercase leading-[0.95] tracking-tight sm:text-5xl">
@@ -56,7 +56,7 @@ export function StatsCounters({ stats }: { stats: SiteStats }) {
               className="border-l border-white/15 pl-5"
             >
               <Counter value={item.value} suffix={item.suffix} />
-              <p className="mt-2 text-xs uppercase tracking-wider text-brand-300">
+              <p className="mt-2 text-xs uppercase tracking-wider text-white/50">
                 {item.label}
               </p>
             </motion.div>

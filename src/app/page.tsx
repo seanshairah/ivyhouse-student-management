@@ -69,7 +69,7 @@ export default async function HomePage() {
 
   return (
     <SiteShell>
-      <Hero house={heroHouse} priceFrom={priceFrom} />
+      <Hero house={heroHouse} studentsHoused={stats.students} />
       <RoomRail rooms={featured} priceFrom={priceFrom} />
       <StatsCounters stats={stats} />
       <WhyIvy />

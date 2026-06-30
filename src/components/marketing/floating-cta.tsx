@@ -33,7 +33,7 @@ export function FloatingBookCta() {
       className={cn(
         // Compact bottom-right pill (not full-width) so it doesn't sit on top of
         // content buttons like "View house" / "Book" and block their taps.
-        "fixed bottom-5 right-4 z-40 inline-flex items-center justify-center gap-2 rounded-full bg-sand-400 px-5 py-3.5 text-sm font-semibold text-white shadow-lg shadow-sand-400/30 transition-all duration-300 hover:bg-sand-500 lg:hidden",
+        "fixed bottom-5 right-4 z-40 inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3.5 text-sm font-semibold text-brand-900 shadow-lg shadow-black/30 transition-all duration-300 hover:bg-white/90 lg:hidden",
         visible
           ? "translate-y-0 opacity-100"
           : "pointer-events-none translate-y-24 opacity-0",

@@ -22,6 +22,10 @@ const buttonVariants = cva(
           "bg-primary text-primary-foreground shadow-sm hover:bg-brand-700 hover:shadow-md",
         accent:
           "bg-primary text-primary-foreground shadow-sm hover:bg-brand-700 hover:shadow-md",
+        white:
+          "bg-white text-brand-900 shadow-sm hover:bg-white/90",
+        glass:
+          "border border-white/20 bg-white/10 text-white backdrop-blur hover:bg-white/20",
       },
       size: {
         default: "h-10 px-4 py-2",
