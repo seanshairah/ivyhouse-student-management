@@ -43,14 +43,16 @@ export default async function LoginPage({
 
             <LoginForm next={next} />
 
-            <div className="mt-6 rounded-xl bg-muted/60 p-3.5 text-xs text-muted-foreground">
-              <p className="mb-1.5 font-semibold text-foreground">Demo accounts</p>
-              <ul className="space-y-0.5">
-                <li>Owner — owner@ivyhouse.local / owner123</li>
-                <li>Student — student@ivyhouse.local / student123</li>
-                <li>Caretaker — caretaker@ivyhouse.local / caretaker123</li>
-              </ul>
-            </div>
+            {process.env.NODE_ENV !== "production" && (
+              <div className="mt-6 rounded-xl bg-muted/60 p-3.5 text-xs text-muted-foreground">
+                <p className="mb-1.5 font-semibold text-foreground">Demo accounts</p>
+                <ul className="space-y-0.5">
+                  <li>Owner — owner@ivyhouse.local / owner123</li>
+                  <li>Student — student@ivyhouse.local / student123</li>
+                  <li>Caretaker — caretaker@ivyhouse.local / caretaker123</li>
+                </ul>
+              </div>
+            )}
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Don&apos;t have a room yet?{" "}
