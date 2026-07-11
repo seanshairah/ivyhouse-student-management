@@ -74,13 +74,22 @@ function toUrlEncoded(data: Record<string, string>): string {
 
 function parsePaynowResponse(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const line of text.split("\n")) {
-    const idx = line.indexOf("=");
-    if (idx > -1) {
-      out[line.slice(0, idx).trim().toLowerCase()] = decodeURIComponent(
-        line.slice(idx + 1).trim(),
-      );
+  // Paynow returns a URL-encoded query string, e.g.
+  //   status=Ok&browserurl=https%3A%2F%2F...&pollurl=...&hash=...
+  // Some endpoints separate with newlines instead, so split on both.
+  for (const pair of text.split(/[&\n\r]+/)) {
+    const idx = pair.indexOf("=");
+    if (idx < 0) continue;
+    const key = pair.slice(0, idx).trim().toLowerCase();
+    if (!key) continue;
+    const rawVal = pair.slice(idx + 1).trim().replace(/\+/g, " ");
+    let value = rawVal;
+    try {
+      value = decodeURIComponent(rawVal);
+    } catch {
+      /* leave value as-is if it isn't valid percent-encoding */
     }
+    out[key] = value;
   }
   return out;
 }
@@ -134,7 +143,11 @@ export async function createPaynowPayment(
         providerRef: parsed.paynowreference,
       };
     }
-    return { ok: false, mode: "live", error: parsed.error || "Paynow error" };
+    return {
+      ok: false,
+      mode: "live",
+      error: parsed.error || parsed.status || "Paynow error",
+    };
   } catch (e) {
     return { ok: false, mode: "live", error: (e as Error).message };
   }
@@ -209,7 +222,11 @@ export async function createPaynowMobilePayment(
           "Check your phone and enter your EcoCash PIN to approve the payment.",
       };
     }
-    return { ok: false, mode: "live", error: parsed.error || "Paynow declined the request." };
+    return {
+      ok: false,
+      mode: "live",
+      error: parsed.error || parsed.status || "Paynow declined the request.",
+    };
   } catch (e) {
     return { ok: false, mode: "live", error: (e as Error).message };
   }
