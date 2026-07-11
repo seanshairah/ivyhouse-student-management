@@ -11,6 +11,15 @@ import crypto from "crypto";
  */
 
 const PAYNOW_INITIATE_URL = "https://www.paynow.co.zw/interface/initiatetransaction";
+const PAYNOW_REMOTE_URL = "https://www.paynow.co.zw/interface/remotetransaction";
+
+/** Paynow mobile-money expects the local MSISDN format, e.g. "0771234567". */
+export function toLocalZwPhone(phone: string): string {
+  let p = (phone || "").replace(/[^\d]/g, "");
+  if (p.startsWith("263")) p = "0" + p.slice(3);
+  else if (p.startsWith("7") && p.length === 9) p = "0" + p;
+  return p;
+}
 
 export interface PaynowConfig {
   integrationId: string;
@@ -126,6 +135,81 @@ export async function createPaynowPayment(
       };
     }
     return { ok: false, mode: "live", error: parsed.error || "Paynow error" };
+  } catch (e) {
+    return { ok: false, mode: "live", error: (e as Error).message };
+  }
+}
+
+export interface InitiateMobileInput extends InitiatePaymentInput {
+  phone: string;
+  method?: "ecocash" | "onemoney" | "innbucks";
+}
+
+export interface InitiateMobileResult {
+  ok: boolean;
+  pollUrl?: string;
+  providerRef?: string;
+  instructions?: string;
+  error?: string;
+  mode: "development" | "live";
+}
+
+/**
+ * Create a Paynow *mobile-money (Express)* payment — sends a USSD prompt
+ * directly to the payer's phone (e.g. EcoCash). Returns a poll URL to check
+ * status. In development mode this is mocked and auto-approves on poll.
+ */
+export async function createPaynowMobilePayment(
+  input: InitiateMobileInput,
+): Promise<InitiateMobileResult> {
+  const config = getPaynowConfig();
+  const method = input.method ?? "ecocash";
+
+  if (config.mode === "development") {
+    return {
+      ok: true,
+      mode: "development",
+      pollUrl: `mock://poll/${input.reference}`,
+      providerRef: `MOCK-${input.reference}`,
+      instructions:
+        "Development mode — no real prompt is sent; this auto-approves.",
+    };
+  }
+
+  try {
+    const values: Record<string, string> = {
+      id: config.integrationId,
+      reference: input.reference,
+      amount: input.amount.toFixed(2),
+      additionalinfo: input.description,
+      returnurl: config.returnUrl,
+      resulturl: config.resultUrl,
+      authemail: input.email,
+      phone: toLocalZwPhone(input.phone),
+      method,
+      status: "Message",
+    };
+    values.hash = paynowHash(values, config.integrationKey);
+
+    const res = await fetch(PAYNOW_REMOTE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: toUrlEncoded(values),
+    });
+    const parsed = parsePaynowResponse(await res.text());
+
+    if (parsed.status?.toLowerCase() === "ok") {
+      return {
+        ok: true,
+        mode: "live",
+        pollUrl: parsed.pollurl,
+        providerRef: parsed.paynowreference,
+        instructions:
+          parsed.instructions ||
+          "Check your phone and enter your EcoCash PIN to approve the payment.",
+      };
+    }
+    return { ok: false, mode: "live", error: parsed.error || "Paynow declined the request." };
   } catch (e) {
     return { ok: false, mode: "live", error: (e as Error).message };
   }

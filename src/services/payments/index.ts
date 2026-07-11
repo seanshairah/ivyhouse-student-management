@@ -8,7 +8,17 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { generateReference, formatCurrency, formatDate, toNumber } from "@/lib/utils";
-import { createPaynowPayment } from "./paynow";
+import {
+  createPaynowPayment,
+  createPaynowMobilePayment,
+  verifyPaynowPayment,
+} from "./paynow";
+import {
+  SEMESTER_MONTHS,
+  TRANSPORT_FEE,
+  DEFAULT_MONTHLY_RENT,
+  type PaymentPurpose,
+} from "@/constants";
 import { updateInvoiceAfterPayment } from "@/services/invoices";
 import { createReceipt } from "@/services/receipts";
 import { sendTemplatedEmail } from "@/services/email";
@@ -93,6 +103,150 @@ export async function generatePaymentLink(
   });
 
   return { payment, redirectUrl: paynow.redirectUrl };
+}
+
+/** Resolve a self-service payment purpose into an amount + description. */
+export function resolvePurpose(
+  purpose: PaymentPurpose,
+  monthlyRent: number,
+): { amount: number; description: string } {
+  const rent = monthlyRent > 0 ? monthlyRent : DEFAULT_MONTHLY_RENT;
+  switch (purpose) {
+    case "RENT_MONTH":
+      return { amount: rent, description: "Accommodation — next month rent" };
+    case "RENT_SEMESTER":
+      return {
+        amount: rent * SEMESTER_MONTHS,
+        description: `Accommodation — next semester rent (${SEMESTER_MONTHS} months)`,
+      };
+    case "TRANSPORT":
+      return { amount: TRANSPORT_FEE, description: "Transport / shuttle service — 1 month" };
+  }
+}
+
+export interface SelfPaymentResult {
+  ok: boolean;
+  reference?: string;
+  amount?: number;
+  redirectUrl?: string;
+  pollUrl?: string;
+  instructions?: string;
+  error?: string;
+}
+
+/**
+ * Student-initiated payment (rent for a month/semester, or transport) via
+ * Paynow — either an EcoCash Express phone prompt or a web redirect. Creates
+ * the Payment + transaction record; the amount is computed server-side.
+ */
+export async function createSelfPayment(opts: {
+  profileId: string;
+  purpose: PaymentPurpose;
+  method: "ecocash" | "web";
+  phone?: string;
+}): Promise<SelfPaymentResult> {
+  const profile = await prisma.studentProfile.findUnique({
+    where: { id: opts.profileId },
+    include: { room: true },
+  });
+  if (!profile) return { ok: false, error: "Student profile not found" };
+
+  const monthly = profile.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
+  const { amount, description } = resolvePurpose(opts.purpose, monthly);
+  const reference = generateReference("PAY");
+
+  if (opts.method === "ecocash") {
+    const phone = (opts.phone || "").trim();
+    if (phone.replace(/[^\d]/g, "").length < 9) {
+      return { ok: false, error: "Enter a valid EcoCash number." };
+    }
+    const r = await createPaynowMobilePayment({
+      reference,
+      amount,
+      email: profile.email,
+      description,
+      phone,
+      method: "ecocash",
+    });
+    await prisma.payment.create({
+      data: {
+        reference,
+        studentProfileId: profile.id,
+        amount,
+        method: "PAYNOW",
+        status: r.ok ? PaymentStatus.PENDING : PaymentStatus.FAILED,
+        transaction: {
+          create: {
+            provider: "paynow",
+            pollUrl: r.pollUrl,
+            providerRef: r.providerRef,
+            rawStatus: r.ok ? "ecocash-prompt-sent" : r.error,
+          },
+        },
+      },
+    });
+    if (!r.ok) return { ok: false, reference, error: r.error };
+    return { ok: true, reference, amount, pollUrl: r.pollUrl, instructions: r.instructions };
+  }
+
+  // Web redirect (Paynow hosted checkout)
+  const r = await createPaynowPayment({
+    reference,
+    amount,
+    email: profile.email,
+    description,
+  });
+  await prisma.payment.create({
+    data: {
+      reference,
+      studentProfileId: profile.id,
+      amount,
+      method: "PAYNOW",
+      status: PaymentStatus.PENDING,
+      paymentLink: r.redirectUrl,
+      transaction: {
+        create: {
+          provider: "paynow",
+          pollUrl: r.pollUrl,
+          providerRef: r.providerRef,
+          rawStatus: r.mode === "development" ? "mock-initiated" : "initiated",
+        },
+      },
+    },
+  });
+  if (!r.ok) return { ok: false, reference, error: r.error };
+  return { ok: true, reference, amount, redirectUrl: r.redirectUrl };
+}
+
+/**
+ * Poll a payment's status (used by the EcoCash Express client). If Paynow
+ * reports paid, settle it (idempotent). Returns a simple status string.
+ */
+export async function pollAndSettle(
+  reference: string,
+): Promise<{ status: "paid" | "pending" | "failed"; message?: string }> {
+  const payment = await prisma.payment.findUnique({
+    where: { reference },
+    include: { transaction: true },
+  });
+  if (!payment) return { status: "failed", message: "Payment not found" };
+  if (payment.status === PaymentStatus.PAID) return { status: "paid" };
+  if (payment.status === PaymentStatus.FAILED) return { status: "failed" };
+
+  const pollUrl = payment.transaction?.pollUrl;
+  if (!pollUrl) return { status: "pending" };
+
+  const verify = await verifyPaynowPayment(pollUrl);
+  if (verify.paid) {
+    await settlePayment(reference);
+    return { status: "paid" };
+  }
+  const s = (verify.status || "").toLowerCase();
+  if (s.includes("cancel") || s.includes("fail") || s.includes("disputed")) {
+    await failPayment(reference, verify.status);
+    return { status: "failed", message: verify.status };
+  }
+  return { status: "pending", message: verify.status };
 }
 
 /**

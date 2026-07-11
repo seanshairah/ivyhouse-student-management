@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
-import { settlePayment } from "@/services/payments";
+import { settlePayment, createSelfPayment, pollAndSettle } from "@/services/payments";
+import type { PaymentPurpose } from "@/constants";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -62,6 +63,70 @@ export async function payNowAction(reference: string): Promise<ActionResult> {
     return { success: true };
   } catch (e) {
     return { success: false, error: (e as Error).message };
+  }
+}
+
+export interface InitiatePaymentResult {
+  success: boolean;
+  error?: string;
+  reference?: string;
+  redirectUrl?: string;
+  instructions?: string;
+  amount?: number;
+}
+
+/**
+ * Student-initiated payment for rent (month/semester) or transport, via
+ * EcoCash Express (phone prompt) or a web redirect. Amount is computed
+ * server-side from the purpose.
+ */
+export async function initiateSelfPaymentAction(input: {
+  purpose: PaymentPurpose;
+  method: "ecocash" | "web";
+  phone?: string;
+}): Promise<InitiatePaymentResult> {
+  const session = await requireRole("STUDENT");
+  try {
+    const profile = await getProfile(session.userId);
+    if (!profile) return { success: false, error: "Profile not found" };
+    if (!["RENT_MONTH", "RENT_SEMESTER", "TRANSPORT"].includes(input.purpose)) {
+      return { success: false, error: "Invalid payment type" };
+    }
+    const r = await createSelfPayment({
+      profileId: profile.id,
+      purpose: input.purpose,
+      method: input.method,
+      phone: input.phone,
+    });
+    if (!r.ok) return { success: false, error: r.error, reference: r.reference };
+    revalidatePath("/student/payments");
+    return {
+      success: true,
+      reference: r.reference,
+      redirectUrl: r.redirectUrl,
+      instructions: r.instructions,
+      amount: r.amount,
+    };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/** Poll an in-flight payment (EcoCash Express) and settle it once paid. */
+export async function pollPaymentAction(
+  reference: string,
+): Promise<{ status: "paid" | "pending" | "failed"; message?: string }> {
+  await requireRole("STUDENT");
+  if (!reference) return { status: "failed", message: "Missing reference" };
+  try {
+    const r = await pollAndSettle(reference);
+    if (r.status === "paid") {
+      revalidatePath("/student/payments");
+      revalidatePath("/student");
+    }
+    return r;
+  } catch (e) {
+    return { status: "pending", message: (e as Error).message };
   }
 }
 

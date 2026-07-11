@@ -31,14 +31,22 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
-import { formatCurrency, formatDate } from "@/lib/utils";
-import { PAYMENT_STATUS_META, INVOICE_STATUS_META } from "@/constants";
+import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
+import { formatCurrency, formatDate, toNumber } from "@/lib/utils";
+import {
+  PAYMENT_STATUS_META,
+  INVOICE_STATUS_META,
+  SEMESTER_MONTHS,
+  TRANSPORT_FEE,
+  DEFAULT_MONTHLY_RENT,
+} from "@/constants";
 import { PaymentStatus } from "@prisma/client";
 
 export default async function StudentPaymentsPage() {
   const session = await requireRole("STUDENT");
   const profile = await prisma.studentProfile.findUnique({
     where: { userId: session.userId },
+    include: { room: true },
   });
 
   if (!profile) {
@@ -68,6 +76,7 @@ export default async function StudentPaymentsPage() {
   ]);
 
   const pending = payments.filter((p) => p.status === PaymentStatus.PENDING);
+  const monthly = profile.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
 
   return (
     <div className="space-y-6">
@@ -95,6 +104,71 @@ export default async function StudentPaymentsPage() {
           hint={balance.balance > 0 ? "Outstanding" : "Settled"}
         />
       </div>
+
+      {/* Make a payment */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Make a payment</CardTitle>
+          <CardDescription>
+            Pay rent or transport instantly with EcoCash — enter your number and
+            approve the prompt on your phone.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-3">
+          <div className="flex flex-col rounded-xl border border-border p-4">
+            <p className="text-sm font-semibold">Next month&apos;s rent</p>
+            <p className="mt-0.5 font-display text-xl font-bold">
+              {formatCurrency(monthly)}
+            </p>
+            <p className="mb-3 flex-1 text-xs text-muted-foreground">
+              One month of accommodation.
+            </p>
+            <EcocashPayDialog
+              purpose="RENT_MONTH"
+              amount={monthly}
+              title="Next month's rent"
+              triggerLabel="Pay next month"
+              defaultPhone={profile.phone}
+              fullWidth
+            />
+          </div>
+          <div className="flex flex-col rounded-xl border border-border p-4">
+            <p className="text-sm font-semibold">Next semester&apos;s rent</p>
+            <p className="mt-0.5 font-display text-xl font-bold">
+              {formatCurrency(monthly * SEMESTER_MONTHS)}
+            </p>
+            <p className="mb-3 flex-1 text-xs text-muted-foreground">
+              {SEMESTER_MONTHS} months upfront.
+            </p>
+            <EcocashPayDialog
+              purpose="RENT_SEMESTER"
+              amount={monthly * SEMESTER_MONTHS}
+              title="Next semester's rent"
+              triggerLabel="Pay next semester"
+              defaultPhone={profile.phone}
+              fullWidth
+            />
+          </div>
+          <div className="flex flex-col rounded-xl border border-border p-4">
+            <p className="text-sm font-semibold">Transport service</p>
+            <p className="mt-0.5 font-display text-xl font-bold">
+              {formatCurrency(TRANSPORT_FEE)}
+            </p>
+            <p className="mb-3 flex-1 text-xs text-muted-foreground">
+              Monthly shuttle to campus.
+            </p>
+            <EcocashPayDialog
+              purpose="TRANSPORT"
+              amount={TRANSPORT_FEE}
+              title="Transport service"
+              triggerLabel="Pay transport"
+              defaultPhone={profile.phone}
+              variant="outline"
+              fullWidth
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Pending payment requests */}
       {pending.length > 0 && (
