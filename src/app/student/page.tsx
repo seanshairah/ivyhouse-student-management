@@ -23,8 +23,14 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
-import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils";
-import { APPLICATION_STATUS_META } from "@/constants";
+import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
+import { formatCurrency, formatDate, formatDateTime, toNumber } from "@/lib/utils";
+import {
+  APPLICATION_STATUS_META,
+  SEMESTER_MONTHS,
+  TRANSPORT_FEE,
+  DEFAULT_MONTHLY_RENT,
+} from "@/constants";
 import { PaymentStatus } from "@prisma/client";
 
 export default async function StudentHomePage() {
@@ -70,6 +76,7 @@ export default async function StudentHomePage() {
     ]);
 
   const firstName = (profile?.fullName ?? session.name).split(" ")[0];
+  const monthly = profile?.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
 
   return (
     <div className="space-y-6">
@@ -123,6 +130,44 @@ export default async function StudentHomePage() {
               </div>
             </div>
             <PayButton reference={pendingPayment.reference} size="default" />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pay for accommodation & services */}
+      {profile && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Pay for accommodation &amp; services</CardTitle>
+            <CardDescription>
+              Instant EcoCash payments — enter your number and approve the prompt
+              on your phone.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-3">
+            <EcocashPayDialog
+              purpose="RENT_MONTH"
+              amount={monthly}
+              title="Next month's rent"
+              triggerLabel={`Next month · ${formatCurrency(monthly)}`}
+              defaultPhone={profile.phone}
+            />
+            <EcocashPayDialog
+              purpose="RENT_SEMESTER"
+              amount={monthly * SEMESTER_MONTHS}
+              title="Next semester's rent"
+              triggerLabel={`Next semester · ${formatCurrency(monthly * SEMESTER_MONTHS)}`}
+              defaultPhone={profile.phone}
+              variant="outline"
+            />
+            <EcocashPayDialog
+              purpose="TRANSPORT"
+              amount={TRANSPORT_FEE}
+              title="Transport service"
+              triggerLabel={`Transport · ${formatCurrency(TRANSPORT_FEE)}`}
+              defaultPhone={profile.phone}
+              variant="outline"
+            />
           </CardContent>
         </Card>
       )}

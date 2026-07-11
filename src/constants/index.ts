@@ -6,6 +6,16 @@ export const HOUSES = {
   IVY: { name: "Ivy House", slug: "ivy-house" },
 } as const;
 
+// ── Self-service payment config ───────────────────────────────
+/** Number of months billed for a full semester's rent. */
+export const SEMESTER_MONTHS = 4;
+/** Flat monthly transport / shuttle service fee (USD). */
+export const TRANSPORT_FEE = 20;
+/** Fallback monthly rent if a student has no assigned room price yet. */
+export const DEFAULT_MONTHLY_RENT = 180;
+
+export type PaymentPurpose = "RENT_MONTH" | "RENT_SEMESTER" | "TRANSPORT";
+
 export const NAV_LINKS = [
   { label: "Home", href: "/" },
   { label: "The House", href: "/houses" },
