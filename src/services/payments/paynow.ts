@@ -122,7 +122,7 @@ export async function createPaynowPayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: input.email,
+      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
       status: "Message",
     };
     values.hash = paynowHash(values, config.integrationKey);
@@ -197,7 +197,7 @@ export async function createPaynowMobilePayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: input.email,
+      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
       phone: toLocalZwPhone(input.phone),
       method,
       status: "Message",
