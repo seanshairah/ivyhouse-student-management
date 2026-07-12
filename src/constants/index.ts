@@ -10,9 +10,30 @@ export const HOUSES = {
 /** Number of months billed for a full semester's rent. */
 export const SEMESTER_MONTHS = 4;
 /** Flat monthly transport / shuttle service fee (USD). */
-export const TRANSPORT_FEE = 20;
-/** Fallback monthly rent if a student has no assigned room price yet. */
-export const DEFAULT_MONTHLY_RENT = 180;
+export const TRANSPORT_FEE = 15;
+/** Fallback monthly rent if a student's room type has no fixed price. */
+export const DEFAULT_MONTHLY_RENT = 120;
+
+/** Fixed monthly rent by room type (USD). */
+export const RENT_BY_ROOM_TYPE: Record<string, number> = {
+  SHARED_DOUBLE: 120, // 2-bed sharing
+  SHARED_TRIPLE: 90, // 3-bed sharing
+};
+
+/**
+ * The monthly rent a student pays: the fixed price for their room type when
+ * one is defined, otherwise the room's own price, otherwise the default.
+ */
+export function monthlyRentFor(
+  roomType?: string | null,
+  roomPrice?: number | null,
+): number {
+  if (roomType && RENT_BY_ROOM_TYPE[roomType] != null) {
+    return RENT_BY_ROOM_TYPE[roomType];
+  }
+  if (roomPrice && roomPrice > 0) return roomPrice;
+  return DEFAULT_MONTHLY_RENT;
+}
 
 export type PaymentPurpose = "RENT_MONTH" | "RENT_SEMESTER" | "TRANSPORT";
 

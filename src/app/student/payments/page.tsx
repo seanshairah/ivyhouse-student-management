@@ -38,7 +38,7 @@ import {
   INVOICE_STATUS_META,
   SEMESTER_MONTHS,
   TRANSPORT_FEE,
-  DEFAULT_MONTHLY_RENT,
+  monthlyRentFor,
 } from "@/constants";
 import { PaymentStatus } from "@prisma/client";
 
@@ -76,7 +76,10 @@ export default async function StudentPaymentsPage() {
   ]);
 
   const pending = payments.filter((p) => p.status === PaymentStatus.PENDING);
-  const monthly = profile.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
+  const monthly = monthlyRentFor(
+    profile.room?.type,
+    profile.room ? toNumber(profile.room.price) : null,
+  );
 
   return (
     <div className="space-y-6">
@@ -163,7 +166,7 @@ export default async function StudentPaymentsPage() {
               title="Transport service"
               triggerLabel="Pay transport"
               defaultPhone={profile.phone}
-              variant="outline"
+              variant="brand"
               fullWidth
             />
           </div>
