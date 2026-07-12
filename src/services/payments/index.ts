@@ -12,6 +12,7 @@ import {
   createPaynowPayment,
   createPaynowMobilePayment,
   verifyPaynowPayment,
+  getPaynowConfig,
 } from "./paynow";
 import {
   SEMESTER_MONTHS,
@@ -157,6 +158,32 @@ export async function createSelfPayment(opts: {
     profile.room ? toNumber(profile.room.price) : null,
   );
   const { amount, description } = resolvePurpose(opts.purpose, monthly);
+
+  // Duplicate-charge guard: if an identical payment is already in flight (same
+  // student + amount, created seconds ago), reuse it instead of creating a
+  // second charge (double-click / retry after latency).
+  const recent = await prisma.payment.findFirst({
+    where: {
+      studentProfileId: profile.id,
+      amount,
+      status: PaymentStatus.PENDING,
+      createdAt: { gte: new Date(Date.now() - 90_000) },
+    },
+    include: { transaction: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (recent) {
+    return {
+      ok: true,
+      reference: recent.reference,
+      amount,
+      pollUrl: recent.transaction?.pollUrl ?? undefined,
+      redirectUrl: recent.paymentLink ?? undefined,
+      instructions:
+        "You already have a payment in progress for this amount — check your phone or wait for it to confirm.",
+    };
+  }
+
   const reference = generateReference("PAY");
 
   if (opts.method === "ecocash") {
@@ -178,18 +205,28 @@ export async function createSelfPayment(opts: {
         studentProfileId: profile.id,
         amount,
         method: "PAYNOW",
-        status: r.ok ? PaymentStatus.PENDING : PaymentStatus.FAILED,
+        // Ambiguous (network/timeout) stays PENDING so polling/webhook can
+        // still resolve it — never auto-fail an uncertain charge.
+        status: r.ok || r.ambiguous ? PaymentStatus.PENDING : PaymentStatus.FAILED,
         transaction: {
           create: {
             provider: "paynow",
             pollUrl: r.pollUrl,
             providerRef: r.providerRef,
-            rawStatus: r.ok ? "ecocash-prompt-sent" : r.error,
+            rawStatus: r.ok ? "ecocash-prompt-sent" : r.ambiguous ? "uncertain" : r.error,
           },
         },
       },
     });
-    if (!r.ok) return { ok: false, reference, error: r.error };
+    if (!r.ok) {
+      return {
+        ok: false,
+        reference,
+        error: r.ambiguous
+          ? "We couldn't confirm the request reached EcoCash. Please don't pay again yet — check your phone, then your payment history in a minute."
+          : r.error,
+      };
+    }
     return { ok: true, reference, amount, pollUrl: r.pollUrl, instructions: r.instructions };
   }
 
@@ -238,7 +275,15 @@ export async function pollAndSettle(
   if (payment.status === PaymentStatus.FAILED) return { status: "failed" };
 
   const pollUrl = payment.transaction?.pollUrl;
-  if (!pollUrl) return { status: "pending" };
+  if (!pollUrl) {
+    // No provider poll URL (e.g. a seeded / mock payment). Only auto-settle in
+    // development; in live we can't verify, so leave it pending.
+    if (getPaynowConfig().mode === "development") {
+      await settlePayment(reference);
+      return { status: "paid" };
+    }
+    return { status: "pending" };
+  }
 
   const verify = await verifyPaynowPayment(pollUrl);
   if (verify.paid) {

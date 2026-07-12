@@ -57,6 +57,8 @@ export interface InitiatePaymentResult {
   pollUrl?: string;
   providerRef?: string;
   error?: string;
+  /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
+  ambiguous?: boolean;
   mode: "development" | "live";
 }
 
@@ -149,7 +151,8 @@ export async function createPaynowPayment(
       error: parsed.error || parsed.status || "Paynow error",
     };
   } catch (e) {
-    return { ok: false, mode: "live", error: (e as Error).message };
+    // Network/timeout: the request MAY have reached Paynow. Ambiguous, not failed.
+    return { ok: false, ambiguous: true, mode: "live", error: (e as Error).message };
   }
 }
 
@@ -164,6 +167,8 @@ export interface InitiateMobileResult {
   providerRef?: string;
   instructions?: string;
   error?: string;
+  /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
+  ambiguous?: boolean;
   mode: "development" | "live";
 }
 
@@ -228,7 +233,8 @@ export async function createPaynowMobilePayment(
       error: parsed.error || parsed.status || "Paynow declined the request.",
     };
   } catch (e) {
-    return { ok: false, mode: "live", error: (e as Error).message };
+    // Network/timeout: the prompt MAY have been sent. Ambiguous, not failed.
+    return { ok: false, ambiguous: true, mode: "live", error: (e as Error).message };
   }
 }
 

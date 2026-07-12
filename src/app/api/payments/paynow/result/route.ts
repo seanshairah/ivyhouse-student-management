@@ -1,12 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { parsePaynowResult, settlePayment, failPayment } from "@/services/payments";
+import { parsePaynowResult, pollAndSettle } from "@/services/payments";
 
 /**
  * Paynow server-to-server result webhook.
  *
- * Accepts either application/x-www-form-urlencoded or JSON. Always returns
- * 200 "ok" so Paynow does not retry indefinitely on bad input; errors are
- * logged instead of thrown. No auth — this is a server-to-server callback.
+ * SECURITY: the webhook is unauthenticated and its body is spoofable, so we do
+ * NOT trust the posted `status`. We only use it as a trigger — the payment is
+ * then verified against Paynow's own poll URL (server→Paynow over HTTPS) via
+ * pollAndSettle, which is the authoritative source of truth. This means a
+ * forged "status=Paid" POST cannot settle a payment.
+ *
+ * Always returns 200 "ok" so Paynow does not retry indefinitely; errors are
+ * logged instead of thrown.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -32,11 +37,13 @@ export async function POST(req: NextRequest) {
       return new NextResponse("ok");
     }
 
-    if (result.paid) {
-      await settlePayment(result.reference);
-    } else {
-      await failPayment(result.reference, result.status);
-    }
+    // Verify against Paynow before doing anything — never trust the posted body.
+    const outcome = await pollAndSettle(result.reference);
+    console.info("[paynow/result]", {
+      reference: result.reference,
+      postedStatus: result.status,
+      verifiedOutcome: outcome.status,
+    });
 
     return new NextResponse("ok");
   } catch (err) {

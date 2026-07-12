@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
-import { settlePayment, createSelfPayment, pollAndSettle } from "@/services/payments";
+import { createSelfPayment, pollAndSettle } from "@/services/payments";
 import type { PaymentPurpose } from "@/constants";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
@@ -52,15 +52,26 @@ export async function requestRenewalAction(
   }
 }
 
-/** Mock "Pay now" — settle the payment immediately (idempotent). */
+/**
+ * "Pay now" from the checkout page. Verifies the payment against Paynow
+ * (poll URL) before settling — in development this auto-approves the mock;
+ * in live it only settles once Paynow reports the payment as paid.
+ */
 export async function payNowAction(reference: string): Promise<ActionResult> {
   await requireRole("STUDENT");
   if (!reference) return { success: false, error: "Missing payment reference" };
   try {
-    await settlePayment(reference);
+    const r = await pollAndSettle(reference);
     revalidatePath("/student/payments");
     revalidatePath("/student");
-    return { success: true };
+    if (r.status === "paid") return { success: true };
+    return {
+      success: false,
+      error:
+        r.status === "failed"
+          ? r.message || "The payment failed or was cancelled."
+          : "We're still confirming this payment. Please wait a moment and refresh.",
+    };
   } catch (e) {
     return { success: false, error: (e as Error).message };
   }
@@ -137,10 +148,12 @@ export async function confirmPaymentReturn(
   await requireRole("STUDENT");
   if (!reference) return { success: false, error: "Missing payment reference" };
   try {
-    await settlePayment(reference);
+    // Verify with Paynow before settling — a browser landing on the return URL
+    // is not proof of payment. pollAndSettle checks the provider poll URL.
+    const r = await pollAndSettle(reference);
     revalidatePath("/student/payments");
     revalidatePath("/student");
-    return { success: true };
+    return { success: r.status === "paid", error: r.status === "paid" ? undefined : r.message };
   } catch (e) {
     return { success: false, error: (e as Error).message };
   }
