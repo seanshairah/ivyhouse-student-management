@@ -29,7 +29,7 @@ import {
   APPLICATION_STATUS_META,
   SEMESTER_MONTHS,
   TRANSPORT_FEE,
-  DEFAULT_MONTHLY_RENT,
+  monthlyRentFor,
 } from "@/constants";
 import { PaymentStatus } from "@prisma/client";
 
@@ -76,7 +76,10 @@ export default async function StudentHomePage() {
     ]);
 
   const firstName = (profile?.fullName ?? session.name).split(" ")[0];
-  const monthly = profile?.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
+  const monthly = monthlyRentFor(
+    profile?.room?.type,
+    profile?.room ? toNumber(profile.room.price) : null,
+  );
 
   return (
     <div className="space-y-6">
@@ -158,7 +161,7 @@ export default async function StudentHomePage() {
               title="Next semester's rent"
               triggerLabel={`Next semester · ${formatCurrency(monthly * SEMESTER_MONTHS)}`}
               defaultPhone={profile.phone}
-              variant="outline"
+              variant="brand"
             />
             <EcocashPayDialog
               purpose="TRANSPORT"
@@ -166,7 +169,7 @@ export default async function StudentHomePage() {
               title="Transport service"
               triggerLabel={`Transport · ${formatCurrency(TRANSPORT_FEE)}`}
               defaultPhone={profile.phone}
-              variant="outline"
+              variant="brand"
             />
           </CardContent>
         </Card>

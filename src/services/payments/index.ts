@@ -17,6 +17,7 @@ import {
   SEMESTER_MONTHS,
   TRANSPORT_FEE,
   DEFAULT_MONTHLY_RENT,
+  monthlyRentFor,
   type PaymentPurpose,
 } from "@/constants";
 import { updateInvoiceAfterPayment } from "@/services/invoices";
@@ -151,7 +152,10 @@ export async function createSelfPayment(opts: {
   });
   if (!profile) return { ok: false, error: "Student profile not found" };
 
-  const monthly = profile.room ? toNumber(profile.room.price) : DEFAULT_MONTHLY_RENT;
+  const monthly = monthlyRentFor(
+    profile.room?.type,
+    profile.room ? toNumber(profile.room.price) : null,
+  );
   const { amount, description } = resolvePurpose(opts.purpose, monthly);
   const reference = generateReference("PAY");
 
