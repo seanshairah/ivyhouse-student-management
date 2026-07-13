@@ -460,6 +460,11 @@ export async function approveApplication(
         tempPassword,
         isRenewal,
       };
+    }, {
+      // Password hashing + several round-trips over the pooled serverless
+      // connection can approach Prisma's 5s default; give it headroom.
+      maxWait: 10_000,
+      timeout: 20_000,
     });
 
   // Generate the payment request + Paynow link, but suppress its own

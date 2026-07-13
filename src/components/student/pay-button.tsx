@@ -13,7 +13,11 @@ interface PayButtonProps {
   className?: string;
 }
 
-/** Inline "Pay now" — links to the simulated checkout for the reference. */
+/**
+ * Inline "Pay now" — opens the checkout route for the reference. In live mode
+ * that route hands off to Paynow's hosted page; in development it shows the
+ * simulated checkout.
+ */
 export function PayButton({
   reference,
   label = "Pay now",

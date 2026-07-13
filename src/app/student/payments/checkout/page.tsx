@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { CheckCircle2, CreditCard, Info } from "lucide-react";
+import { redirect } from "next/navigation";
+import { AlertCircle, CheckCircle2, CreditCard, Info } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getPaynowConfig } from "@/services/payments";
+import { getPaynowConfig, resolveWebCheckout } from "@/services/payments";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -53,8 +54,17 @@ export default async function CheckoutPage({
   }
 
   const amount = Number(payment.amount);
-  const alreadyPaid = payment.status === PaymentStatus.PAID;
   const description = payment.invoice?.description ?? "Accommodation payment";
+
+  // Decide how to collect this payment. In live mode we must hand off to
+  // Paynow's own hosted page — the internal checkout below is a dev-only mock.
+  const checkout = await resolveWebCheckout(payment.reference);
+  if (checkout.kind === "redirect") {
+    redirect(checkout.url);
+  }
+  const alreadyPaid =
+    checkout.kind === "paid" || payment.status === PaymentStatus.PAID;
+  const liveError = checkout.kind === "error" ? checkout.message : null;
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -113,6 +123,16 @@ export default async function CheckoutPage({
                 <CheckCircle2 className="size-7" />
               </div>
               <p className="font-semibold">This payment is already complete</p>
+              <Button asChild variant="brand" className="w-full">
+                <Link href="/student/payments">Back to payments</Link>
+              </Button>
+            </div>
+          ) : liveError ? (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <span>{liveError}</span>
+              </div>
               <Button asChild variant="brand" className="w-full">
                 <Link href="/student/payments">Back to payments</Link>
               </Button>

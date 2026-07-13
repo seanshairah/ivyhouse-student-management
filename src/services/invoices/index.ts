@@ -16,7 +16,7 @@ export async function createInvoice(
   input: CreateInvoiceInput,
   tx: Prisma.TransactionClient = prisma,
 ) {
-  const number = await nextNumber("invoice");
+  const number = await nextNumber("invoice", tx);
   const dueDate = input.dueInDays
     ? new Date(Date.now() + input.dueInDays * 86400000)
     : null;
