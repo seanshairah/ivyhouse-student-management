@@ -22,6 +22,27 @@ async function getProfile(userId: string) {
   return prisma.studentProfile.findUnique({ where: { userId } });
 }
 
+/**
+ * Verify a payment reference belongs to the signed-in student before we act on
+ * it. Without this, a student could poll/settle another student's payment by
+ * reference. Settlement always credits the payment's own owner, but this keeps
+ * one student from touching another's payment at all.
+ */
+async function assertOwnsPayment(
+  userId: string,
+  reference: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const payment = await prisma.payment.findUnique({
+    where: { reference },
+    select: { studentProfile: { select: { userId: true } } },
+  });
+  if (!payment) return { ok: false, error: "Payment not found" };
+  if (payment.studentProfile.userId !== userId) {
+    return { ok: false, error: "This payment isn't on your account." };
+  }
+  return { ok: true };
+}
+
 /** Request to renew / extend the stay for the coming term. */
 export async function requestRenewalAction(
   formData: FormData,
@@ -58,9 +79,11 @@ export async function requestRenewalAction(
  * in live it only settles once Paynow reports the payment as paid.
  */
 export async function payNowAction(reference: string): Promise<ActionResult> {
-  await requireRole("STUDENT");
+  const session = await requireRole("STUDENT");
   if (!reference) return { success: false, error: "Missing payment reference" };
   try {
+    const owns = await assertOwnsPayment(session.userId, reference);
+    if (!owns.ok) return { success: false, error: owns.error };
     const r = await pollAndSettle(reference);
     revalidatePath("/student/payments");
     revalidatePath("/student");
@@ -127,9 +150,11 @@ export async function initiateSelfPaymentAction(input: {
 export async function pollPaymentAction(
   reference: string,
 ): Promise<{ status: "paid" | "pending" | "failed"; message?: string }> {
-  await requireRole("STUDENT");
+  const session = await requireRole("STUDENT");
   if (!reference) return { status: "failed", message: "Missing reference" };
   try {
+    const owns = await assertOwnsPayment(session.userId, reference);
+    if (!owns.ok) return { status: "failed", message: owns.error };
     const r = await pollAndSettle(reference);
     if (r.status === "paid") {
       revalidatePath("/student/payments");
@@ -145,9 +170,11 @@ export async function pollPaymentAction(
 export async function confirmPaymentReturn(
   reference: string,
 ): Promise<ActionResult> {
-  await requireRole("STUDENT");
+  const session = await requireRole("STUDENT");
   if (!reference) return { success: false, error: "Missing payment reference" };
   try {
+    const owns = await assertOwnsPayment(session.userId, reference);
+    if (!owns.ok) return { success: false, error: owns.error };
     // Verify with Paynow before settling — a browser landing on the return URL
     // is not proof of payment. pollAndSettle checks the provider poll URL.
     const r = await pollAndSettle(reference);

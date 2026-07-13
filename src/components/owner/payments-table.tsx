@@ -98,7 +98,7 @@ export function PaymentsTable({ payments }: { payments: PaymentRow[] }) {
                         <CheckCircle2 className="size-4" /> Mark paid
                       </Button>
                     ) : p.receiptId ? (
-                      <Button asChild variant="ghost" size="sm">
+                      <Button asChild variant="outline" size="sm">
                         <a href={`/api/documents/receipt/${p.receiptId}`} target="_blank" rel="noreferrer">
                           <Receipt className="size-4" /> Receipt
                         </a>

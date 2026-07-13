@@ -348,13 +348,20 @@ export async function pollAndSettle(
     include: { transaction: true },
   });
   if (!payment) return { status: "failed", message: "Payment not found" };
+  // Terminal states never change from a poll.
   if (payment.status === PaymentStatus.PAID) return { status: "paid" };
-  if (payment.status === PaymentStatus.FAILED) return { status: "failed" };
+  if (
+    payment.status === PaymentStatus.FAILED ||
+    payment.status === PaymentStatus.CANCELLED ||
+    payment.status === PaymentStatus.REFUNDED
+  ) {
+    return { status: "failed", message: PAYMENT_STATUS_LABEL[payment.status] };
+  }
 
   const pollUrl = payment.transaction?.pollUrl;
-  if (!pollUrl) {
-    // No provider poll URL (e.g. a seeded / mock payment). Only auto-settle in
-    // development; in live we can't verify, so leave it pending.
+  if (!pollUrl || pollUrl.startsWith("mock://")) {
+    // No verifiable provider poll URL. Only auto-settle the simulated mock in
+    // development; in live we can NEVER settle without Paynow confirming.
     if (getPaynowConfig().mode === "development") {
       await settlePayment(reference);
       return { status: "paid" };
@@ -363,16 +370,62 @@ export async function pollAndSettle(
   }
 
   const verify = await verifyPaynowPayment(pollUrl);
-  if (verify.paid) {
-    await settlePayment(reference);
-    return { status: "paid" };
+  switch (verify.outcome) {
+    case "paid":
+      await settlePayment(reference);
+      return { status: "paid" };
+    case "cancelled":
+      await setPaymentStatus(reference, PaymentStatus.CANCELLED, verify.status);
+      return { status: "failed", message: "This payment was cancelled." };
+    case "refunded":
+      await setPaymentStatus(reference, PaymentStatus.REFUNDED, verify.status);
+      return { status: "failed", message: "This payment was refunded / reversed." };
+    case "failed":
+      await failPayment(reference, verify.status);
+      return { status: "failed", message: verify.status };
+    case "processing":
+      await setPaymentStatus(reference, PaymentStatus.PROCESSING, verify.status);
+      return { status: "pending", message: "Payment is processing." };
+    default:
+      return { status: "pending", message: verify.status };
   }
-  const s = (verify.status || "").toLowerCase();
-  if (s.includes("cancel") || s.includes("fail") || s.includes("disputed")) {
-    await failPayment(reference, verify.status);
-    return { status: "failed", message: verify.status };
-  }
-  return { status: "pending", message: verify.status };
+}
+
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  PENDING: "Pending",
+  PROCESSING: "Processing",
+  PAID: "Paid",
+  FAILED: "Failed",
+  CANCELLED: "Cancelled",
+  REFUNDED: "Refunded",
+};
+
+/**
+ * Set a payment's status without settling it. Used for non-paid terminal /
+ * in-flight states (cancelled, refunded, processing). Never promotes a payment
+ * to PAID — only settlePayment does that, and only after Paynow confirms.
+ */
+async function setPaymentStatus(
+  reference: string,
+  status: PaymentStatus,
+  rawStatus?: string,
+) {
+  const payment = await prisma.payment.findUnique({
+    where: { reference },
+    include: { transaction: true },
+  });
+  if (!payment) return null;
+  // Never downgrade an already-settled payment via a poll.
+  if (payment.status === PaymentStatus.PAID) return payment;
+  return prisma.payment.update({
+    where: { id: payment.id },
+    data: {
+      status,
+      ...(payment.transaction && rawStatus
+        ? { transaction: { update: { rawStatus } } }
+        : {}),
+    },
+  });
 }
 
 /**
@@ -534,10 +587,5 @@ export async function settlePayment(reference: string) {
 }
 
 export async function failPayment(reference: string, reason?: string) {
-  const payment = await prisma.payment.findUnique({ where: { reference } });
-  if (!payment) return null;
-  return prisma.payment.update({
-    where: { id: payment.id },
-    data: { status: PaymentStatus.FAILED, transaction: { update: { rawStatus: reason } } },
-  });
+  return setPaymentStatus(reference, PaymentStatus.FAILED, reason);
 }

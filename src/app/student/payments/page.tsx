@@ -261,7 +261,7 @@ export default async function StudentPaymentsPage() {
                       <StatusBadge meta={INVOICE_STATUS_META[inv.status]} />
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button asChild variant="ghost" size="sm">
+                      <Button asChild variant="outline" size="sm">
                         <a
                           href={`/api/documents/invoice/${inv.id}`}
                           target="_blank"
@@ -319,7 +319,7 @@ export default async function StudentPaymentsPage() {
                       {p.status === PaymentStatus.PENDING ? (
                         <PayButton reference={p.reference} />
                       ) : p.status === PaymentStatus.PAID && p.receipt ? (
-                        <Button asChild variant="ghost" size="sm">
+                        <Button asChild variant="outline" size="sm">
                           <a
                             href={`/api/documents/receipt/${p.receipt.id}`}
                             target="_blank"

@@ -163,7 +163,7 @@ export default async function StudentDetailPage({
                           <StatusBadge meta={INVOICE_STATUS_META[i.status]} />
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button asChild variant="ghost" size="sm">
+                          <Button asChild variant="outline" size="sm">
                             <a href={`/api/documents/invoice/${i.id}`} target="_blank" rel="noreferrer">View</a>
                           </Button>
                         </TableCell>
@@ -207,7 +207,7 @@ export default async function StudentDetailPage({
                         <TableCell className="text-muted-foreground">{formatDate(p.createdAt)}</TableCell>
                         <TableCell className="text-right">
                           {p.receipt && (
-                            <Button asChild variant="ghost" size="sm">
+                            <Button asChild variant="outline" size="sm">
                               <a href={`/api/documents/receipt/${p.receipt.id}`} target="_blank" rel="noreferrer">
                                 <Receipt className="size-4" /> Receipt
                               </a>
