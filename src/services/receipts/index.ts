@@ -10,7 +10,7 @@ export async function createReceipt(
 ) {
   const existing = await tx.receipt.findUnique({ where: { paymentId } });
   if (existing) return existing;
-  const number = await nextNumber("receipt");
+  const number = await nextNumber("receipt", tx);
   return tx.receipt.create({
     data: { number, paymentId, amount },
   });

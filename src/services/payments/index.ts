@@ -474,6 +474,11 @@ export async function settlePayment(reference: string) {
       data: { status: StudentStatus.ACTIVE },
     });
     return r;
+  }, {
+    // Settlement makes many round-trips; the pooled serverless connection to
+    // Neon adds latency to each, so give it more than Prisma's 5s default.
+    maxWait: 10_000,
+    timeout: 20_000,
   });
 
   // Notifications (best-effort, outside the transaction).
