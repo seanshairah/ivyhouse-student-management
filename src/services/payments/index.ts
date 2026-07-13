@@ -260,6 +260,83 @@ export async function createSelfPayment(opts: {
 }
 
 /**
+ * Resolve how to collect a pending web payment.
+ *
+ * In development we use the internal simulated checkout. In LIVE mode the
+ * student must be sent to Paynow's own hosted page — never our internal page,
+ * which cannot take money. If the payment already has a real Paynow browser
+ * link we reuse it; otherwise (e.g. it was started as an EcoCash prompt) we
+ * create a fresh Paynow web transaction for the same reference and persist the
+ * new link + poll URL so the return/webhook flow can still verify it.
+ */
+export async function resolveWebCheckout(
+  reference: string,
+): Promise<
+  | { kind: "paid" }
+  | { kind: "mock" }
+  | { kind: "redirect"; url: string }
+  | { kind: "error"; message: string }
+> {
+  const config = getPaynowConfig();
+  const payment = await prisma.payment.findUnique({
+    where: { reference },
+    include: { transaction: true, studentProfile: true, invoice: true },
+  });
+  if (!payment) return { kind: "error", message: "Payment not found" };
+  if (payment.status === PaymentStatus.PAID) return { kind: "paid" };
+  if (payment.status === PaymentStatus.FAILED) {
+    return { kind: "error", message: "This payment was cancelled or failed. Please start a new one." };
+  }
+
+  // Development: the internal simulated checkout is the intended flow.
+  if (config.mode === "development") return { kind: "mock" };
+
+  // Live: reuse an existing real Paynow link if we have one.
+  const existing = payment.paymentLink;
+  const isRealPaynowLink =
+    !!existing && /^https?:\/\//i.test(existing) && existing.includes("paynow.co.zw");
+  if (isRealPaynowLink) return { kind: "redirect", url: existing! };
+
+  // No usable hosted link yet — create a fresh Paynow web transaction.
+  const r = await createPaynowPayment({
+    reference: payment.reference,
+    amount: toNumber(payment.amount),
+    email: payment.studentProfile.email,
+    description: payment.invoice?.description || "Accommodation payment",
+  });
+  if (!r.ok || !r.redirectUrl) {
+    return {
+      kind: "error",
+      message: r.error || "We couldn't reach Paynow just now. Please try again in a moment.",
+    };
+  }
+
+  await prisma.payment.update({
+    where: { id: payment.id },
+    data: {
+      paymentLink: r.redirectUrl,
+      transaction: {
+        upsert: {
+          create: {
+            provider: "paynow",
+            pollUrl: r.pollUrl,
+            providerRef: r.providerRef,
+            rawStatus: "initiated",
+          },
+          update: {
+            pollUrl: r.pollUrl,
+            providerRef: r.providerRef,
+            rawStatus: "initiated",
+          },
+        },
+      },
+    },
+  });
+
+  return { kind: "redirect", url: r.redirectUrl };
+}
+
+/**
  * Poll a payment's status (used by the EcoCash Express client). If Paynow
  * reports paid, settle it (idempotent). Returns a simple status string.
  */

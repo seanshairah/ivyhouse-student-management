@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/misc";
 import { PaymentSuccess } from "@/components/student/payment-success";
 import { PayButton } from "@/components/student/pay-button";
+import { PaymentPendingPoll } from "@/components/student/payment-pending-poll";
 
 export default async function PaymentReturnPage({
   searchParams,
@@ -103,6 +104,7 @@ export default async function PaymentReturnPage({
             />
           ) : (
             <div className="flex flex-col items-center text-center">
+              <PaymentPendingPoll reference={payment.reference} />
               <div className="flex size-16 items-center justify-center rounded-full bg-amber-100 text-amber-600">
                 <AlertTriangle className="size-9" />
               </div>
@@ -110,8 +112,8 @@ export default async function PaymentReturnPage({
                 Payment pending
               </h2>
               <p className="mt-1.5 text-sm text-muted-foreground">
-                We&apos;re still confirming your payment. This can take a moment — please
-                check back shortly.
+                We&apos;re still confirming your payment — this can take a moment. This
+                page will update automatically once it&apos;s confirmed.
               </p>
               <div className="mt-6 flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
                 <Button asChild variant="brand">
