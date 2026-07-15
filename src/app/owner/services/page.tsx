@@ -92,7 +92,7 @@ export default async function OwnerServicesPage() {
                           notes: c.notes,
                         } as CaretakerData}
                         trigger={
-                          <Button variant="ghost" size="icon" title="Edit">
+                          <Button variant="outline" size="icon" title="Edit">
                             <Pencil className="size-4" />
                           </Button>
                         }

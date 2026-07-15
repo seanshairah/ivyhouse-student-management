@@ -238,9 +238,37 @@ export async function createPaynowMobilePayment(
   }
 }
 
+export type PaynowOutcome =
+  | "paid"
+  | "pending"
+  | "processing"
+  | "cancelled"
+  | "refunded"
+  | "failed";
+
+/**
+ * Map a raw Paynow status string to a coarse outcome. Anything we don't
+ * explicitly recognise as settled stays "pending" — we NEVER treat an unknown
+ * status as paid, so a payment can only be marked paid on an explicit Paynow
+ * "Paid"/"Delivered"/"Awaiting Delivery" (money received) status.
+ */
+export function classifyPaynowStatus(raw: string): PaynowOutcome {
+  const s = (raw || "").toLowerCase();
+  if (s.includes("paid") || s.includes("awaiting delivery") || s.includes("delivered"))
+    return "paid";
+  if (s.includes("refund") || s.includes("revers")) return "refunded";
+  if (s.includes("cancel")) return "cancelled";
+  if (s.includes("disput") || s.includes("fail") || s.includes("declin"))
+    return "failed";
+  if (s.includes("process")) return "processing";
+  // "Sent", "Created", "Pending" or anything unrecognised → not yet paid.
+  return "pending";
+}
+
 export interface VerifyResult {
   paid: boolean;
   status: string;
+  outcome: PaynowOutcome;
   raw?: Record<string, string>;
 }
 
@@ -249,19 +277,22 @@ export async function verifyPaynowPayment(
   pollUrl: string,
 ): Promise<VerifyResult> {
   const config = getPaynowConfig();
-  if (config.mode === "development" || pollUrl.startsWith("mock://")) {
-    return { paid: true, status: "Paid" };
+  if (config.mode === "development") {
+    return { paid: true, status: "Paid", outcome: "paid" };
+  }
+  // A mock/empty poll URL in LIVE mode cannot be verified against Paynow —
+  // never treat it as paid, or we'd settle a payment nobody actually made.
+  if (!pollUrl || pollUrl.startsWith("mock://")) {
+    return { paid: false, status: "Unverifiable", outcome: "pending" };
   }
   try {
     const res = await fetch(pollUrl);
     const parsed = parsePaynowResponse(await res.text());
-    return {
-      paid: parsed.status?.toLowerCase() === "paid",
-      status: parsed.status || "Unknown",
-      raw: parsed,
-    };
+    const status = parsed.status || "Unknown";
+    const outcome = classifyPaynowStatus(status);
+    return { paid: outcome === "paid", status, outcome, raw: parsed };
   } catch (e) {
-    return { paid: false, status: `Error: ${(e as Error).message}` };
+    return { paid: false, status: `Error: ${(e as Error).message}`, outcome: "pending" };
   }
 }
 

@@ -114,7 +114,7 @@ export function ApplicationsTable({ applications }: { applications: ApplicationR
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(a.createdAt)}</TableCell>
                   <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
+                    <Button asChild variant="outline" size="sm">
                       <Link href={`/owner/applications/${a.id}`}>
                         Review <ArrowRight className="size-4" />
                       </Link>

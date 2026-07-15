@@ -206,7 +206,7 @@ export function StudentActions({
       {/* Archive */}
       <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
         <DialogTrigger asChild>
-          <Button variant="ghost" size="sm" className="w-full justify-start text-rose-600 hover:text-rose-700">
+          <Button variant="outline" size="sm" className="w-full justify-start border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700">
             <Archive className="size-4" /> Archive student
           </Button>
         </DialogTrigger>

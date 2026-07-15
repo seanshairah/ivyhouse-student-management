@@ -114,7 +114,7 @@ export function StudentsTable({
                   </TableCell>
                   <TableCell className="text-muted-foreground">{s.phone}</TableCell>
                   <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm">
+                    <Button asChild variant="outline" size="sm">
                       <Link href={`/owner/students/${s.id}`}>
                         Open <ArrowRight className="size-4" />
                       </Link>

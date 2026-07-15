@@ -89,7 +89,7 @@ export function InvoicesTable({ invoices }: { invoices: InvoiceRow[] }) {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button asChild variant="ghost" size="sm">
+                      <Button asChild variant="outline" size="sm">
                         <a href={`/api/documents/invoice/${i.id}`} target="_blank" rel="noreferrer">
                           <ExternalLink className="size-4" /> View
                         </a>

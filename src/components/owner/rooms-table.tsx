@@ -178,14 +178,14 @@ export function RoomsTable({
                         houses={houses}
                         room={r as RoomFormData}
                         trigger={
-                          <Button variant="ghost" size="icon" title="Edit">
+                          <Button variant="outline" size="icon" title="Edit">
                             <Pencil className="size-4" />
                           </Button>
                         }
                       />
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" disabled={pending}>
+                          <Button variant="outline" size="icon" disabled={pending} title="More actions">
                             <MoreHorizontal className="size-4" />
                           </Button>
                         </DropdownMenuTrigger>
