@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { toNumber } from "@/lib/utils";
+import { TRANSPORT_FEE } from "@/constants";
 
 /** High-level KPIs for the owner overview. */
 export async function getOverviewStats() {
@@ -10,6 +11,10 @@ export async function getOverviewStats() {
     pendingApplications,
     paidPayments,
     invoices,
+    // Students with an assigned room drive the expected monthly rent roll; each
+    // pays their room's per-student rate. Students on transport add the flat fee.
+    housedStudents,
+    transportStudents,
   ] = await Promise.all([
     prisma.studentProfile.count({ where: { status: { notIn: ["ARCHIVED"] } } }),
     prisma.studentProfile.count({ where: { status: "ACTIVE" } }),
@@ -19,6 +24,13 @@ export async function getOverviewStats() {
     }),
     prisma.payment.findMany({ where: { status: "PAID" } }),
     prisma.invoice.findMany({ where: { status: { not: "CANCELLED" } } }),
+    prisma.studentProfile.findMany({
+      where: { status: { notIn: ["ARCHIVED", "MOVED_OUT"] }, roomId: { not: null } },
+      select: { room: { select: { price: true } } },
+    }),
+    prisma.studentProfile.count({
+      where: { status: { notIn: ["ARCHIVED", "MOVED_OUT"] }, usesTransport: true },
+    }),
   ]);
 
   const totalRooms = rooms.length;
@@ -39,6 +51,15 @@ export async function getOverviewStats() {
   const totalPaid = invoices.reduce((s, i) => s + toNumber(i.amountPaid), 0);
   const outstanding = totalInvoiced - totalPaid;
 
+  // Projected recurring monthly income: rent for every housed student (their
+  // room's per-student rate) plus the transport fee for every subscriber.
+  const expectedMonthlyRent = housedStudents.reduce(
+    (s, st) => s + (st.room ? toNumber(st.room.price) : 0),
+    0,
+  );
+  const expectedMonthlyTransport = transportStudents * TRANSPORT_FEE;
+  const expectedMonthlyIncome = expectedMonthlyRent + expectedMonthlyTransport;
+
   return {
     totalStudents,
     activeStudents,
@@ -50,6 +71,11 @@ export async function getOverviewStats() {
     monthlyRevenue,
     totalRevenue,
     outstanding,
+    housedStudents: housedStudents.length,
+    transportStudents,
+    expectedMonthlyRent,
+    expectedMonthlyTransport,
+    expectedMonthlyIncome,
   };
 }
 

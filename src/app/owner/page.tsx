@@ -114,13 +114,31 @@ export default async function OwnerOverviewPage() {
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard label="Total students" value={stats.totalStudents} icon="Users" accent="brand" hint={`${stats.activeStudents} active`} />
-        <StatCard label="Available rooms" value={stats.availableRooms} icon="DoorOpen" accent="emerald" hint={`${stats.totalRooms} total`} />
-        <StatCard label="Occupied rooms" value={stats.occupiedRooms} icon="BedDouble" accent="blue" />
-        <StatCard label="Pending applications" value={stats.pendingApplications} icon="FileText" accent="amber" />
-        <StatCard label="Monthly revenue" value={formatCurrency(stats.monthlyRevenue)} icon="TrendingUp" accent="brand" />
+        <StatCard
+          label="Projected monthly income"
+          value={formatCurrency(stats.expectedMonthlyIncome)}
+          icon="TrendingUp"
+          accent="emerald"
+          hint="Rent + transport, per month"
+        />
+        <StatCard
+          label="Expected rent / month"
+          value={formatCurrency(stats.expectedMonthlyRent)}
+          icon="DollarSign"
+          accent="brand"
+          hint={`${stats.housedStudents} of ${stats.totalStudents} with a room`}
+        />
+        <StatCard
+          label="Transport / month"
+          value={formatCurrency(stats.expectedMonthlyTransport)}
+          icon="Bus"
+          accent="blue"
+          hint={`${stats.transportStudents} subscriber${stats.transportStudents === 1 ? "" : "s"}`}
+        />
+        <StatCard label="Received this month" value={formatCurrency(stats.monthlyRevenue)} icon="Wallet" accent="slate" hint="Deposits + payments" />
         <StatCard label="Outstanding balances" value={formatCurrency(stats.outstanding)} icon="AlertTriangle" accent="rose" />
-        <StatCard label="Occupancy rate" value={`${stats.occupancyRate}%`} icon="PieChart" accent="slate" />
-        <StatCard label="Total revenue" value={formatCurrency(stats.totalRevenue)} icon="DollarSign" accent="emerald" />
+        <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon="PieChart" accent="slate" hint={`${stats.occupiedRooms} of ${stats.totalRooms} rooms`} />
+        <StatCard label="Pending applications" value={stats.pendingApplications} icon="FileText" accent="amber" />
       </div>
 
       {/* Alerts */}
