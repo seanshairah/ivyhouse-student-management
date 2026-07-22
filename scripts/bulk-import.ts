@@ -45,7 +45,10 @@ const ADMIN_NAME = process.env.ADMIN_NAME || "Blessing";
 const ADMIN_PHONE = process.env.ADMIN_PHONE || "";
 const DO_WIPE_AND_IMPORT = process.env.CONFIRM === "WIPE_AND_IMPORT";
 const DO_SEND = process.env.SEND === "1";
-const EMAIL_FROM = process.env.EMAIL_FROM || "Ivy House <no-reply@ivyhouse.local>";
+const EMAIL_FROM =
+  process.env.RESEND_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  "Ivy Properties <notifications@ivyproperties.co.zw>";
 
 const sql = neon(DATABASE_URL);
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;

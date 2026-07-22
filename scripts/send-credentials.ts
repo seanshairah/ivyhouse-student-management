@@ -31,7 +31,10 @@ const APP_URL = process.env.APP_URL || "https://ivyproperties.co.zw";
 const LOGIN_URL = `${APP_URL.replace(/\/$/, "")}/auth/login`;
 const DO_SEND = process.env.SEND === "1";
 const CHANNELS = (process.env.CHANNELS || "both").toLowerCase();
-const EMAIL_FROM = process.env.EMAIL_FROM || "Ivy House <no-reply@ivyhouse.local>";
+const EMAIL_FROM =
+  process.env.RESEND_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  "Ivy Properties <notifications@ivyproperties.co.zw>";
 
 const wantSms = CHANNELS === "both" || CHANNELS === "sms";
 const wantEmail = CHANNELS === "both" || CHANNELS === "email";
