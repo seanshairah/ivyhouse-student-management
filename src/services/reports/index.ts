@@ -42,8 +42,15 @@ export async function getOverviewStats() {
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthlyRevenue = paidPayments
-    .filter((p) => p.paidAt && p.paidAt >= monthStart)
+  // Deposits (reference DEP-*) are booking money, not monthly rent income —
+  // keep them out of "collected this month" so that figure reflects real rent
+  // and transport payments only.
+  const isDeposit = (ref: string) => ref.startsWith("DEP-");
+  const depositsCollected = paidPayments
+    .filter((p) => isDeposit(p.reference))
+    .reduce((s, p) => s + toNumber(p.amount), 0);
+  const collectedThisMonth = paidPayments
+    .filter((p) => !isDeposit(p.reference) && p.paidAt && p.paidAt >= monthStart)
     .reduce((s, p) => s + toNumber(p.amount), 0);
   const totalRevenue = paidPayments.reduce((s, p) => s + toNumber(p.amount), 0);
 
@@ -68,7 +75,8 @@ export async function getOverviewStats() {
     occupiedRooms,
     pendingApplications,
     occupancyRate,
-    monthlyRevenue,
+    collectedThisMonth,
+    depositsCollected,
     totalRevenue,
     outstanding,
     housedStudents: housedStudents.length,
@@ -82,7 +90,12 @@ export async function getOverviewStats() {
 /** Monthly revenue series for charts (last N months). */
 export async function getRevenueSeries(months = 6) {
   const payments = await prisma.payment.findMany({
-    where: { status: "PAID", paidAt: { not: null } },
+    where: {
+      status: "PAID",
+      paidAt: { not: null },
+      // Exclude booking deposits so the trend reflects rent/transport income.
+      reference: { not: { startsWith: "DEP-" } },
+    },
   });
   const series: { month: string; revenue: number }[] = [];
   const now = new Date();

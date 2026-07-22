@@ -135,10 +135,10 @@ export default async function OwnerOverviewPage() {
           accent="blue"
           hint={`${stats.transportStudents} subscriber${stats.transportStudents === 1 ? "" : "s"}`}
         />
-        <StatCard label="Received this month" value={formatCurrency(stats.monthlyRevenue)} icon="Wallet" accent="slate" hint="Deposits + payments" />
-        <StatCard label="Outstanding balances" value={formatCurrency(stats.outstanding)} icon="AlertTriangle" accent="rose" />
+        <StatCard label="Collected this month" value={formatCurrency(stats.collectedThisMonth)} icon="Wallet" accent="emerald" hint="Rent & transport paid" />
+        <StatCard label="Deposits on record" value={formatCurrency(stats.depositsCollected)} icon="PiggyBank" accent="slate" hint="Booking deposits" />
         <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon="PieChart" accent="slate" hint={`${stats.occupiedRooms} of ${stats.totalRooms} rooms`} />
-        <StatCard label="Pending applications" value={stats.pendingApplications} icon="FileText" accent="amber" />
+        <StatCard label="Outstanding balances" value={formatCurrency(stats.outstanding)} icon="AlertTriangle" accent="rose" />
       </div>
 
       {/* Alerts */}
