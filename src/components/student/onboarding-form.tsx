@@ -8,31 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency } from "@/lib/utils";
 import { completeOnboardingAction } from "@/app/student/actions";
 
-export interface RoomOption {
-  id: string;
-  number: string;
-  name: string | null;
-  type: string;
-  floor: string | null;
-  houseName: string;
-  price: number;
-  remaining: number;
-  isCurrent: boolean;
-}
-
-const TYPE_LABELS: Record<string, string> = {
-  SINGLE: "Single",
-  SHARED_DOUBLE: "Shared · Double",
-  SHARED_TRIPLE: "Shared · Triple",
-  ENSUITE: "En-suite",
-  STUDIO: "Studio",
-};
+const ROOM_TYPES: { value: string; label: string; sub: string; price: string }[] = [
+  { value: "SINGLE", label: "Single", sub: "Private room, 1 person", price: "" },
+  { value: "SHARED_DOUBLE", label: "2-bed sharing", sub: "Shared by 2", price: "$120/mo" },
+  { value: "SHARED_TRIPLE", label: "3-bed sharing", sub: "Shared by 3", price: "$90/mo" },
+];
 
 interface Defaults {
-  roomId: string;
   nextOfKinName: string;
   nextOfKinPhone: string;
   nextOfKinRelation: string;
@@ -40,15 +24,9 @@ interface Defaults {
   guardianPhone: string;
 }
 
-export function OnboardingForm({
-  rooms,
-  defaults,
-}: {
-  rooms: RoomOption[];
-  defaults: Defaults;
-}) {
+export function OnboardingForm({ defaults }: { defaults: Defaults }) {
   const router = useRouter();
-  const [roomId, setRoomId] = React.useState(defaults.roomId);
+  const [roomType, setRoomType] = React.useState("");
   const [pending, start] = React.useTransition();
   const [error, setError] = React.useState<string | null>(null);
 
@@ -56,7 +34,7 @@ export function OnboardingForm({
     e.preventDefault();
     setError(null);
     const formData = new FormData(e.currentTarget);
-    formData.set("roomId", roomId);
+    formData.set("roomType", roomType);
     start(async () => {
       const res = await completeOnboardingAction(formData);
       if (res.success) {
@@ -82,27 +60,35 @@ export function OnboardingForm({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <BedDouble className="size-4 text-brand-600" /> Choose your room
+            <BedDouble className="size-4 text-brand-600" /> Your room
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {rooms.length === 0 ? (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <span>
-                No rooms are available to select right now. Please contact the
-                Ivy House office and they&apos;ll assign your room.
-              </span>
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {rooms.map((r) => {
-                const selected = roomId === r.id;
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="roomNumber">Room number</Label>
+            <Input
+              id="roomNumber"
+              name="roomNumber"
+              placeholder="e.g. 204"
+              autoComplete="off"
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              Enter the room you&apos;ve been given. If you&apos;re sharing, everyone in
+              the room enters the same number.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Room type</Label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {ROOM_TYPES.map((t) => {
+                const selected = roomType === t.value;
                 return (
                   <button
                     type="button"
-                    key={r.id}
-                    onClick={() => setRoomId(r.id)}
+                    key={t.value}
+                    onClick={() => setRoomType(t.value)}
                     aria-pressed={selected}
                     className={`relative flex flex-col rounded-xl border p-4 text-left transition-colors ${
                       selected
@@ -115,26 +101,16 @@ export function OnboardingForm({
                         <Check className="size-3.5" />
                       </span>
                     )}
-                    <span className="font-display text-base font-bold">{r.number}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {TYPE_LABELS[r.type] ?? r.type}
-                      {r.floor ? ` · ${r.floor} floor` : ""}
-                    </span>
-                    <span className="mt-2 font-semibold">
-                      {formatCurrency(r.price)}
-                      <span className="text-xs font-normal text-muted-foreground">/mo</span>
-                    </span>
-                    <span className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Users className="size-3" />
-                      {r.isCurrent
-                        ? "Your current room"
-                        : `${r.remaining} space${r.remaining === 1 ? "" : "s"} left`}
-                    </span>
+                    <span className="font-semibold">{t.label}</span>
+                    <span className="text-xs text-muted-foreground">{t.sub}</span>
+                    {t.price && (
+                      <span className="mt-2 text-sm font-semibold text-brand-700">{t.price}</span>
+                    )}
                   </button>
                 );
               })}
             </div>
-          )}
+          </div>
         </CardContent>
       </Card>
 
@@ -177,7 +153,7 @@ export function OnboardingForm({
         </CardContent>
       </Card>
 
-      <Button type="submit" variant="brand" size="lg" className="w-full" disabled={pending || rooms.length === 0}>
+      <Button type="submit" variant="brand" size="lg" className="w-full" disabled={pending}>
         {pending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
         Finish onboarding
       </Button>

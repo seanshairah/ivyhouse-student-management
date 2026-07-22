@@ -163,18 +163,22 @@ async function main() {
   };
   console.log(`House: ${house.name} (${house.id}) — ${roomAgg.rooms} rooms, ${roomAgg.beds} beds`);
 
-  // 2. Validation report.
-  const badEmail = students.filter((s) => !s.emailValid);
-  const badPhone = students.filter((s) => !s.phoneValid);
-  const noDeposit = students.filter((s) => s.deposit == null);
-  console.log(`\nStudents: ${students.length}`);
-  console.log(`  Will email:   ${students.length - badEmail.length}  |  skip (bad/missing email): ${badEmail.length}`);
-  console.log(`  Will SMS:     ${students.length - badPhone.length}  |  skip (bad/missing phone): ${badPhone.length}`);
-  console.log(`  Missing deposit: ${noDeposit.length}`);
-  if (badEmail.length) console.log("  ⚠ No email:", badEmail.map((s) => s.name).join(", "));
-  if (badPhone.length) console.log("  ⚠ No phone:", badPhone.map((s) => s.name).join(", "));
-  if (roomAgg.beds < students.length)
-    console.log(`\n  ⚠ CAPACITY: ${roomAgg.beds} beds < ${students.length} students — not everyone can self-select a room. Add rooms first.`);
+  // 2. Only students with COMPLETE details (valid email AND phone) are imported.
+  const importable = students.filter((s) => s.emailValid && s.phoneValid);
+  const skipped = students.filter((s) => !(s.emailValid && s.phoneValid));
+  const noDeposit = importable.filter((s) => s.deposit == null);
+  console.log(`\nStudents in file: ${students.length}`);
+  console.log(`  ✓ Importable (valid email + phone): ${importable.length}`);
+  console.log(`  ✗ Skipped (incomplete details):     ${skipped.length}`);
+  if (skipped.length)
+    console.log(
+      "    " +
+        skipped
+          .map((s) => `${s.name} [${s.emailValid ? "" : "no email"}${!s.emailValid && !s.phoneValid ? " + " : ""}${s.phoneValid ? "" : "no phone"}]`)
+          .join("; "),
+    );
+  if (noDeposit.length)
+    console.log(`  ⚠ Importable but no deposit recorded: ${noDeposit.map((s) => s.name).join(", ")}`);
 
   if (!DO_WIPE_AND_IMPORT) {
     console.log("\nDRY RUN complete. Re-run with CONFIRM=WIPE_AND_IMPORT (and SEND=1 to message) to execute.");
@@ -203,11 +207,13 @@ async function main() {
     "StudentProfile",
     "Caretaker",
     "User",
+    // Demo rooms are placeholder — real rooms are created when students enter
+    // their room number + type during onboarding.
+    "Room",
   ]) {
     // Table names come from this fixed allowlist — safe to interpolate.
     await sql.query(`DELETE FROM "${table}"`);
   }
-  await sql`UPDATE "Room" SET occupied = 0, status = 'AVAILABLE'::"RoomStatus"`;
 
   const creds: string[] = ["role,name,email,phone,tempPassword"];
 
@@ -223,12 +229,12 @@ async function main() {
   creds.push(`OWNER,${ADMIN_NAME},${ADMIN_EMAIL},${ADMIN_PHONE},${adminPw}`);
   console.log(`Created admin ${ADMIN_EMAIL}`);
 
-  // 6. Students.
+  // 6. Students (only those with complete details).
   let created = 0;
   const report = { emailSent: 0, emailSkip: 0, emailFail: 0, smsSent: 0, smsSkip: 0, smsFail: 0 };
   const failures: string[] = [];
 
-  for (const s of students) {
+  for (const s of importable) {
     const pw = tempPassword();
     const userId = await createUser({
       email: s.email || `${randomUUID().slice(0, 8)}@no-email.ivyhouse.local`,
@@ -284,7 +290,7 @@ async function main() {
       } else report.smsSkip++;
       await sleep(350); // be gentle on the providers
     }
-    if (created % 10 === 0) console.log(`  …${created}/${students.length} students`);
+    if (created % 10 === 0) console.log(`  …${created}/${importable.length} students`);
   }
 
   // Admin messages.

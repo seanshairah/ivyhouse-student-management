@@ -15,9 +15,21 @@ import {
   ServiceRequestCategory,
   ServiceRequestPriority,
   RoomStatus,
+  RoomType,
   StudentStatus,
   type Prisma,
 } from "@prisma/client";
+
+/**
+ * Room options a student can pick during onboarding. Capacity drives how many
+ * students share a room; price is the total monthly rent per student.
+ * (Single rent is a placeholder until confirmed.)
+ */
+const ROOM_SPEC: Record<string, { capacity: number; price: number; label: string }> = {
+  SINGLE: { capacity: 1, price: 120, label: "Single" },
+  SHARED_DOUBLE: { capacity: 2, price: 120, label: "2-bed sharing" },
+  SHARED_TRIPLE: { capacity: 3, price: 90, label: "3-bed sharing" },
+};
 
 type ActionResult = { success: boolean; error?: string };
 
@@ -190,9 +202,14 @@ export async function confirmPaymentReturn(
 }
 
 /**
- * Complete onboarding: the student self-selects an available room and provides
- * next-of-kin details. Assigns the room atomically (capacity-safe so two
- * students can't grab the same last bed) and activates the account.
+ * Complete onboarding: the student enters their room number, states the room
+ * type (single / 2-sharing / 3-sharing), and gives next-of-kin details. The
+ * room is created on first use and shared by later students who enter the same
+ * number — capacity-safe and atomic. Activates the account.
+ *
+ * This flow only applies to students who don't yet have a room (e.g. the bulk
+ * import); the normal application → approval flow assigns rooms as before and
+ * never reaches here.
  */
 export async function completeOnboardingAction(
   formData: FormData,
@@ -202,13 +219,16 @@ export async function completeOnboardingAction(
     const profile = await getProfile(session.userId);
     if (!profile) return { success: false, error: "Profile not found" };
 
-    const roomId = String(formData.get("roomId") || "").trim();
     const str = (k: string) => String(formData.get(k) || "").trim();
+    const roomNumber = str("roomNumber");
+    const roomType = str("roomType");
     const nextOfKinName = str("nextOfKinName");
     const nextOfKinPhone = str("nextOfKinPhone");
     const nextOfKinRelation = str("nextOfKinRelation");
 
-    if (!roomId) return { success: false, error: "Please choose a room." };
+    if (!roomNumber) return { success: false, error: "Enter your room number." };
+    const spec = ROOM_SPEC[roomType];
+    if (!spec) return { success: false, error: "Choose your room type." };
     if (nextOfKinName.length < 2)
       return { success: false, error: "Enter your next of kin's full name." };
     if (nextOfKinPhone.replace(/[^\d]/g, "").length < 7)
@@ -216,33 +236,45 @@ export async function completeOnboardingAction(
     if (!nextOfKinRelation)
       return { success: false, error: "Tell us your relationship to your next of kin." };
 
+    // Resolve the student's house (set at import; else the single house).
+    const houseId =
+      profile.houseId ?? (await prisma.house.findFirst({ select: { id: true } }))?.id;
+    if (!houseId) return { success: false, error: "No house is configured yet." };
+
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const room = await tx.room.findUnique({ where: { id: roomId } });
-      if (!room) throw new Error("That room is no longer available.");
-      if (
-        room.status === RoomStatus.MAINTENANCE ||
-        room.status === RoomStatus.UNAVAILABLE
-      ) {
-        throw new Error("That room isn't available right now. Please pick another.");
-      }
-      // Keeping the same room they already hold is a no-op on capacity.
-      const keepingSameRoom = profile.roomId === roomId;
-      if (!keepingSameRoom && room.occupied >= room.capacity) {
-        throw new Error("That room just filled up. Please choose another.");
+      // Find an existing room with this number in the house, or create it.
+      let room = await tx.room.findFirst({
+        where: { houseId, number: { equals: roomNumber, mode: "insensitive" } },
+      });
+
+      if (!room) {
+        room = await tx.room.create({
+          data: {
+            houseId,
+            number: roomNumber,
+            type: roomType as RoomType,
+            capacity: spec.capacity,
+            occupied: 0,
+            price: spec.price,
+            status: RoomStatus.AVAILABLE,
+          },
+        });
+      } else if (room.occupied >= room.capacity && profile.roomId !== room.id) {
+        throw new Error(
+          `Room ${room.number} is already full (${room.capacity} students). Please check the number or contact the office.`,
+        );
       }
 
+      const keepingSameRoom = profile.roomId === room.id;
       if (!keepingSameRoom) {
-        // Release any previously held room.
+        // Release any room previously held.
         if (profile.roomId) {
           const old = await tx.room.findUnique({ where: { id: profile.roomId } });
           if (old) {
             const occ = Math.max(0, old.occupied - 1);
             await tx.room.update({
               where: { id: old.id },
-              data: {
-                occupied: occ,
-                status: occ === 0 ? RoomStatus.AVAILABLE : old.status,
-              },
+              data: { occupied: occ, status: occ === 0 ? RoomStatus.AVAILABLE : old.status },
             });
           }
         }
@@ -260,7 +292,7 @@ export async function completeOnboardingAction(
         where: { id: profile.id },
         data: {
           roomId: room.id,
-          houseId: room.houseId,
+          houseId,
           status: StudentStatus.ACTIVE,
           nextOfKinName,
           nextOfKinPhone,
