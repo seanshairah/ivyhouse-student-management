@@ -21,8 +21,13 @@ export interface EmailResult {
   error?: string;
 }
 
+// All outgoing email uses this sender. Set RESEND_FROM_EMAIL (or EMAIL_FROM) in
+// the environment to your verified-domain sender; the default is the verified
+// Ivy Properties address so real mail is deliverable even if the env var is unset.
 const EMAIL_FROM =
-  process.env.EMAIL_FROM || "Ivy House <no-reply@ivyhouse.local>";
+  process.env.RESEND_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  "Ivy Properties <notifications@ivyproperties.co.zw>";
 
 function resendConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY);

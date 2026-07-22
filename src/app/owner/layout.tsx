@@ -11,6 +11,7 @@ const NAV: ShellNavItem[] = [
   { label: "Rooms", href: "/owner/rooms", icon: "DoorOpen" },
   { label: "Applications", href: "/owner/applications", icon: "FileText" },
   { label: "Students", href: "/owner/students", icon: "Users" },
+  { label: "Onboarding", href: "/owner/onboarding", icon: "UserPlus" },
   { label: "Payments", href: "/owner/payments", icon: "CreditCard" },
   { label: "Invoices", href: "/owner/invoices", icon: "ReceiptText" },
   { label: "Reports", href: "/owner/reports", icon: "BarChart3" },
