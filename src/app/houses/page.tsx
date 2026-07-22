@@ -20,10 +20,14 @@ const FALLBACK_IMG =
   "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=1200&q=80";
 
 export default async function HousesPage() {
-  const houses = await prisma.house.findMany({
-    orderBy: { name: "asc" },
-    include: { rooms: { orderBy: { price: "asc" } } },
-  });
+  // Don't couple the build to live DB availability — if the query fails during
+  // prerender, render an empty list and let ISR fill it in at runtime.
+  const houses = await prisma.house
+    .findMany({
+      orderBy: { name: "asc" },
+      include: { rooms: { orderBy: { price: "asc" } } },
+    })
+    .catch(() => []);
 
   return (
     <SiteShell>
