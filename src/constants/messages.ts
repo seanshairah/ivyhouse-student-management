@@ -21,6 +21,8 @@ export const SMS_TEMPLATES = {
     "Hi {{studentName}}, your renewal for {{houseName}} ({{term}}) is APPROVED. Sign in to your student portal and pay {{amount}} to confirm your room for the new term.",
   onboardingInvite:
     "Hi {{studentName}}, welcome to Ivy House! Your account is ready. Sign in at {{loginUrl}} with email {{email}} and temporary password {{password}}. You'll set a new password, then choose your room and add next-of-kin details to finish onboarding.",
+  credentialsIssued:
+    "Hi {{studentName}}, your Ivy House student portal is ready. Sign in at {{loginUrl}} with email {{email}} and temporary password {{password}}. You'll set your own password and complete onboarding on first sign-in.",
   adminWelcome:
     "Hi {{studentName}}, your Ivy House admin account is ready. Sign in at {{loginUrl}} with email {{email}} and temporary password {{password}}. You'll be asked to set a new password on first sign in.",
 } as const;
@@ -41,4 +43,5 @@ export const EMAIL_SUBJECTS = {
   renewalApproved: "Your stay renewal is approved 🎉",
   onboardingInvite: "Welcome to Ivy House — your account is ready 🎉",
   adminWelcome: "Your Ivy House admin account is ready",
+  credentialsIssued: "Your Ivy House login details",
 } as const;

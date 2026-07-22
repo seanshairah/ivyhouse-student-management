@@ -266,6 +266,24 @@ export const emailTemplates = {
       ctaUrl: String(d.loginUrl || "#"),
     }),
 
+  // (Re)issued login credentials — used by the rotate-on-send credential flow.
+  credentialsIssued: (d: TemplateData) =>
+    brandedEmail({
+      heading: `Your Ivy House login is ready, ${String(d.studentName).split(" ")[0]}`,
+      intro: "Here are your login details for the Ivy House student portal. Please sign in to set your own password and finish onboarding.",
+      bodyHtml: `On first sign-in you'll be asked to <strong>set a new password</strong>, then to <strong>enter your room</strong> and add your <strong>next-of-kin details</strong>.
+      <div style="margin:18px 0 4px;border:1px solid #e6d9c6;border-radius:12px;padding:16px 18px;background:#faf6f1;">
+        <p style="margin:0 0 12px;font-size:12px;font-weight:700;color:#a87c55;letter-spacing:0.05em;text-transform:uppercase;">Your login credentials</p>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+          <tr><td style="padding:5px 0;color:#8c8c86;font-size:13px;">Email</td><td style="padding:5px 0;text-align:right;font-size:14px;font-weight:600;color:#171716;">${d.email}</td></tr>
+          <tr><td style="padding:5px 0;color:#8c8c86;font-size:13px;">Temporary password</td><td style="padding:5px 0;text-align:right;"><span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;font-weight:700;color:#171716;background:#ffffff;border:1px solid #e6d9c6;border-radius:6px;padding:3px 9px;">${d.password}</span></td></tr>
+        </table>
+        <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#a3a39d;">You'll be required to change this password the first time you sign in.</p>
+      </div>`,
+      ctaLabel: "Sign in & complete onboarding",
+      ctaUrl: String(d.loginUrl || "#"),
+    }),
+
   // Sent to a newly-created owner/admin account with temporary credentials.
   adminWelcome: (d: TemplateData) =>
     brandedEmail({
