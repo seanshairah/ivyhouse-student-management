@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { toNumber } from "@/lib/utils";
+import { TRANSPORT_FEE } from "@/constants";
 
 /** High-level KPIs for the owner overview. */
 export async function getOverviewStats() {
@@ -10,6 +11,10 @@ export async function getOverviewStats() {
     pendingApplications,
     paidPayments,
     invoices,
+    // Students with an assigned room drive the expected monthly rent roll; each
+    // pays their room's per-student rate. Students on transport add the flat fee.
+    housedStudents,
+    transportStudents,
   ] = await Promise.all([
     prisma.studentProfile.count({ where: { status: { notIn: ["ARCHIVED"] } } }),
     prisma.studentProfile.count({ where: { status: "ACTIVE" } }),
@@ -19,6 +24,13 @@ export async function getOverviewStats() {
     }),
     prisma.payment.findMany({ where: { status: "PAID" } }),
     prisma.invoice.findMany({ where: { status: { not: "CANCELLED" } } }),
+    prisma.studentProfile.findMany({
+      where: { status: { notIn: ["ARCHIVED", "MOVED_OUT"] }, roomId: { not: null } },
+      select: { room: { select: { price: true } } },
+    }),
+    prisma.studentProfile.count({
+      where: { status: { notIn: ["ARCHIVED", "MOVED_OUT"] }, usesTransport: true },
+    }),
   ]);
 
   const totalRooms = rooms.length;
@@ -30,14 +42,30 @@ export async function getOverviewStats() {
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const monthlyRevenue = paidPayments
-    .filter((p) => p.paidAt && p.paidAt >= monthStart)
+  // Deposits (reference DEP-*) are booking money, not monthly rent income —
+  // keep them out of "collected this month" so that figure reflects real rent
+  // and transport payments only.
+  const isDeposit = (ref: string) => ref.startsWith("DEP-");
+  const depositsCollected = paidPayments
+    .filter((p) => isDeposit(p.reference))
+    .reduce((s, p) => s + toNumber(p.amount), 0);
+  const collectedThisMonth = paidPayments
+    .filter((p) => !isDeposit(p.reference) && p.paidAt && p.paidAt >= monthStart)
     .reduce((s, p) => s + toNumber(p.amount), 0);
   const totalRevenue = paidPayments.reduce((s, p) => s + toNumber(p.amount), 0);
 
   const totalInvoiced = invoices.reduce((s, i) => s + toNumber(i.amount), 0);
   const totalPaid = invoices.reduce((s, i) => s + toNumber(i.amountPaid), 0);
   const outstanding = totalInvoiced - totalPaid;
+
+  // Projected recurring monthly income: rent for every housed student (their
+  // room's per-student rate) plus the transport fee for every subscriber.
+  const expectedMonthlyRent = housedStudents.reduce(
+    (s, st) => s + (st.room ? toNumber(st.room.price) : 0),
+    0,
+  );
+  const expectedMonthlyTransport = transportStudents * TRANSPORT_FEE;
+  const expectedMonthlyIncome = expectedMonthlyRent + expectedMonthlyTransport;
 
   return {
     totalStudents,
@@ -47,16 +75,27 @@ export async function getOverviewStats() {
     occupiedRooms,
     pendingApplications,
     occupancyRate,
-    monthlyRevenue,
+    collectedThisMonth,
+    depositsCollected,
     totalRevenue,
     outstanding,
+    housedStudents: housedStudents.length,
+    transportStudents,
+    expectedMonthlyRent,
+    expectedMonthlyTransport,
+    expectedMonthlyIncome,
   };
 }
 
 /** Monthly revenue series for charts (last N months). */
 export async function getRevenueSeries(months = 6) {
   const payments = await prisma.payment.findMany({
-    where: { status: "PAID", paidAt: { not: null } },
+    where: {
+      status: "PAID",
+      paidAt: { not: null },
+      // Exclude booking deposits so the trend reflects rent/transport income.
+      reference: { not: { startsWith: "DEP-" } },
+    },
   });
   const series: { month: string; revenue: number }[] = [];
   const now = new Date();

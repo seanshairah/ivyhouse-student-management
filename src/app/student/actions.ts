@@ -294,6 +294,7 @@ export async function completeOnboardingAction(
           roomId: room.id,
           houseId,
           status: StudentStatus.ACTIVE,
+          usesTransport: formData.get("usesTransport") === "on",
           nextOfKinName,
           nextOfKinPhone,
           nextOfKinRelation,

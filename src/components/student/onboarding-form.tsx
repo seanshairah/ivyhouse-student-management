@@ -111,6 +111,20 @@ export function OnboardingForm({ defaults }: { defaults: Defaults }) {
               })}
             </div>
           </div>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border p-4 hover:bg-accent">
+            <input
+              type="checkbox"
+              name="usesTransport"
+              className="mt-0.5 size-4 accent-brand-600"
+            />
+            <span className="text-sm">
+              <span className="font-medium">Add campus transport — $15/mo</span>
+              <span className="block text-xs text-muted-foreground">
+                Daily shuttle between Ivy House and campus. You can change this later.
+              </span>
+            </span>
+          </label>
         </CardContent>
       </Card>
 

@@ -241,6 +241,9 @@ model StudentProfile {
   // targets students who haven't been notified yet.
   credentialsSentAt DateTime?
 
+  // Whether the student subscribes to the monthly campus transport service.
+  usesTransport   Boolean       @default(false)
+
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 

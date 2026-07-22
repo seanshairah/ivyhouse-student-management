@@ -72,7 +72,7 @@ export default async function OwnerReportsPage() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <StatCard label="Total revenue" value={formatCurrency(stats.totalRevenue)} icon="DollarSign" accent="emerald" />
-            <StatCard label="This month" value={formatCurrency(stats.monthlyRevenue)} icon="TrendingUp" accent="brand" />
+            <StatCard label="Collected this month" value={formatCurrency(stats.collectedThisMonth)} icon="TrendingUp" accent="brand" />
             <StatCard label="Outstanding" value={formatCurrency(stats.outstanding)} icon="AlertTriangle" accent="rose" />
             <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon="PieChart" accent="blue" />
           </div>
