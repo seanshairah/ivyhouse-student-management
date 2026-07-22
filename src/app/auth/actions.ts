@@ -8,7 +8,9 @@ import {
   destroySession,
   homeForRole,
 } from "@/lib/auth";
-import { loginSchema } from "@/lib/validators";
+import { loginSchema, changePasswordSchema } from "@/lib/validators";
+import { hashPassword } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { audit } from "@/services/audit";
 import type { ActionResult } from "@/types";
 
@@ -101,6 +103,55 @@ export async function loginAction(
     actorEmail: user.email,
     action: "auth.login",
   });
+
+  // First login on a temporary password: force a password change before
+  // anything else.
+  const redirectTo = user.mustChangePassword
+    ? "/auth/change-password"
+    : homeForRole(user.role);
+
+  return { success: true, data: { redirect: redirectTo } };
+}
+
+/**
+ * Change the signed-in user's password. Used both for the forced first-login
+ * change and as a normal "change password" action. Clears mustChangePassword.
+ */
+export async function changePasswordAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await getSession();
+  if (!session) return { success: false, error: "Your session has expired. Please sign in again." };
+
+  const parsed = changePasswordSchema.safeParse({
+    currentPassword: formData.get("currentPassword"),
+    newPassword: formData.get("newPassword"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0].message };
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
+  if (!user || !user.isActive) {
+    return { success: false, error: "Account not found." };
+  }
+
+  const valid = await verifyPassword(parsed.data.currentPassword, user.passwordHash);
+  if (!valid) {
+    await audit({ userId: user.id, actorEmail: user.email, action: "auth.password_change.failed" });
+    return { success: false, error: "Your current password is incorrect." };
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash: await hashPassword(parsed.data.newPassword),
+      mustChangePassword: false,
+    },
+  });
+  await audit({ userId: user.id, actorEmail: user.email, action: "auth.password_change" });
 
   return { success: true, data: { redirect: homeForRole(user.role) } };
 }

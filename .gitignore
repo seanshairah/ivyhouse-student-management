@@ -60,3 +60,7 @@ tsconfig.tsbuildinfo
 # Misc
 *.pem
 .vercel
+
+# Bulk-import outputs (may contain PII / temp passwords)
+*-credentials.csv
+ivy-house-students*.json

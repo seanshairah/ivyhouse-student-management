@@ -17,10 +17,14 @@ const FALLBACK_IMG =
   "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=1200&q=80";
 
 export default async function HomePage() {
-  const house = await prisma.house.findFirst({
-    orderBy: { createdAt: "asc" },
-    include: { rooms: { orderBy: { price: "asc" } } },
-  });
+  // Never fail the build on a transient DB hiccup at prerender time (e.g. Neon
+  // compute waking from idle) — fall back to defaults; ISR refreshes at runtime.
+  const house = await prisma.house
+    .findFirst({
+      orderBy: { createdAt: "asc" },
+      include: { rooms: { orderBy: { price: "asc" } } },
+    })
+    .catch(() => null);
 
   const rooms = house?.rooms ?? [];
   const prices = rooms.map((r) => toNumber(r.price));
@@ -57,7 +61,7 @@ export default async function HomePage() {
   // Aggregate stats
   const totalCapacity = rooms.reduce((sum, r) => sum + r.capacity, 0);
   const totalOccupied = rooms.reduce((sum, r) => sum + r.occupied, 0);
-  const students = await prisma.studentProfile.count();
+  const students = await prisma.studentProfile.count().catch(() => 0);
   const stats = {
     totalRooms: rooms.length,
     availableRooms: available.length,

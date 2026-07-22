@@ -21,6 +21,11 @@ const ONBOARDING_NAV: ShellNavItem[] = [
   { label: "Pay rent", href: "/student/payments", icon: "CreditCard" },
 ];
 
+// While choosing a room / adding next of kin, restrict to the onboarding step.
+const ROOM_ONBOARDING_NAV: ShellNavItem[] = [
+  { label: "Onboarding", href: "/student/onboarding", icon: "Home" },
+];
+
 export default async function StudentLayout({
   children,
 }: {
@@ -29,7 +34,7 @@ export default async function StudentLayout({
   const session = await requireRole("STUDENT");
   const profile = await prisma.studentProfile.findUnique({
     where: { userId: session.userId },
-    select: { fullName: true, email: true, status: true },
+    select: { fullName: true, email: true, status: true, roomId: true },
   });
 
   const user = {
@@ -37,11 +42,34 @@ export default async function StudentLayout({
     email: profile?.email ?? session.email,
   };
 
+  const pathname = (await headers()).get("x-pathname") ?? "";
+
+  // Onboarding gate: a student with no room yet (e.g. a bulk-imported student)
+  // must choose a room and add next-of-kin details before the dashboard opens.
+  const needsOnboarding = Boolean(profile) && !profile?.roomId;
+  const onOnboardingRoute = pathname.startsWith("/student/onboarding");
+  if (needsOnboarding && pathname && !onOnboardingRoute) {
+    redirect("/student/onboarding");
+  }
+  // The onboarding screen renders without the dashboard chrome.
+  if (needsOnboarding) {
+    return (
+      <DashboardShell
+        nav={ROOM_ONBOARDING_NAV}
+        mobileNav={ROOM_ONBOARDING_NAV}
+        brand="Ivy House"
+        roleLabel="Student"
+        user={user}
+      >
+        {children}
+      </DashboardShell>
+    );
+  }
+
   // Payment gate: a newly-approved student (APPLICANT) must pay rent before
   // accessing the rest of the dashboard. Once payment settles they become
   // ACTIVE and the gate lifts automatically.
   const onboarding = profile?.status === "APPLICANT";
-  const pathname = (await headers()).get("x-pathname") ?? "";
   const onPaymentRoute = pathname.startsWith("/student/payments");
   // Gate only when we know the path (set by middleware) to avoid any redirect loop.
   if (onboarding && pathname && !onPaymentRoute) {
