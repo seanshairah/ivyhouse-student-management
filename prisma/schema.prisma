@@ -237,6 +237,10 @@ model StudentProfile {
   notes           String?       @db.Text
   documents       String[]
 
+  // Tracks when login credentials were last delivered, so a resend pass only
+  // targets students who haven't been notified yet.
+  credentialsSentAt DateTime?
+
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
