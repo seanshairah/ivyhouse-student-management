@@ -19,6 +19,10 @@ export const SMS_TEMPLATES = {
     "Hi {{studentName}}, we've received your request to renew your stay at {{houseName}} for {{term}}. It's awaiting review — we'll notify you by email and SMS shortly.",
   renewalApproved:
     "Hi {{studentName}}, your renewal for {{houseName}} ({{term}}) is APPROVED. Sign in to your student portal and pay {{amount}} to confirm your room for the new term.",
+  onboardingInvite:
+    "Hi {{studentName}}, welcome to Ivy House! Your account is ready. Sign in at {{loginUrl}} with email {{email}} and temporary password {{password}}. You'll set a new password, then choose your room and add next-of-kin details to finish onboarding.",
+  adminWelcome:
+    "Hi {{studentName}}, your Ivy House admin account is ready. Sign in at {{loginUrl}} with email {{email}} and temporary password {{password}}. You'll be asked to set a new password on first sign in.",
 } as const;
 
 export const EMAIL_SUBJECTS = {
@@ -35,4 +39,6 @@ export const EMAIL_SUBJECTS = {
   serviceUpdate: "Service update: {{title}}",
   renewalReceived: "We've received your renewal request",
   renewalApproved: "Your stay renewal is approved 🎉",
+  onboardingInvite: "Welcome to Ivy House — your account is ready 🎉",
+  adminWelcome: "Your Ivy House admin account is ready",
 } as const;

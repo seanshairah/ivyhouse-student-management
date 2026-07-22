@@ -14,6 +14,9 @@ import {
   MessageStatus,
   ServiceRequestCategory,
   ServiceRequestPriority,
+  RoomStatus,
+  StudentStatus,
+  type Prisma,
 } from "@prisma/client";
 
 type ActionResult = { success: boolean; error?: string };
@@ -181,6 +184,96 @@ export async function confirmPaymentReturn(
     revalidatePath("/student/payments");
     revalidatePath("/student");
     return { success: r.status === "paid", error: r.status === "paid" ? undefined : r.message };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Complete onboarding: the student self-selects an available room and provides
+ * next-of-kin details. Assigns the room atomically (capacity-safe so two
+ * students can't grab the same last bed) and activates the account.
+ */
+export async function completeOnboardingAction(
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireRole("STUDENT");
+  try {
+    const profile = await getProfile(session.userId);
+    if (!profile) return { success: false, error: "Profile not found" };
+
+    const roomId = String(formData.get("roomId") || "").trim();
+    const str = (k: string) => String(formData.get(k) || "").trim();
+    const nextOfKinName = str("nextOfKinName");
+    const nextOfKinPhone = str("nextOfKinPhone");
+    const nextOfKinRelation = str("nextOfKinRelation");
+
+    if (!roomId) return { success: false, error: "Please choose a room." };
+    if (nextOfKinName.length < 2)
+      return { success: false, error: "Enter your next of kin's full name." };
+    if (nextOfKinPhone.replace(/[^\d]/g, "").length < 7)
+      return { success: false, error: "Enter a valid next-of-kin phone number." };
+    if (!nextOfKinRelation)
+      return { success: false, error: "Tell us your relationship to your next of kin." };
+
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const room = await tx.room.findUnique({ where: { id: roomId } });
+      if (!room) throw new Error("That room is no longer available.");
+      if (
+        room.status === RoomStatus.MAINTENANCE ||
+        room.status === RoomStatus.UNAVAILABLE
+      ) {
+        throw new Error("That room isn't available right now. Please pick another.");
+      }
+      // Keeping the same room they already hold is a no-op on capacity.
+      const keepingSameRoom = profile.roomId === roomId;
+      if (!keepingSameRoom && room.occupied >= room.capacity) {
+        throw new Error("That room just filled up. Please choose another.");
+      }
+
+      if (!keepingSameRoom) {
+        // Release any previously held room.
+        if (profile.roomId) {
+          const old = await tx.room.findUnique({ where: { id: profile.roomId } });
+          if (old) {
+            const occ = Math.max(0, old.occupied - 1);
+            await tx.room.update({
+              where: { id: old.id },
+              data: {
+                occupied: occ,
+                status: occ === 0 ? RoomStatus.AVAILABLE : old.status,
+              },
+            });
+          }
+        }
+        const occ = room.occupied + 1;
+        await tx.room.update({
+          where: { id: room.id },
+          data: {
+            occupied: occ,
+            status: occ >= room.capacity ? RoomStatus.OCCUPIED : RoomStatus.RESERVED,
+          },
+        });
+      }
+
+      await tx.studentProfile.update({
+        where: { id: profile.id },
+        data: {
+          roomId: room.id,
+          houseId: room.houseId,
+          status: StudentStatus.ACTIVE,
+          nextOfKinName,
+          nextOfKinPhone,
+          nextOfKinRelation,
+          guardianName: str("guardianName") || null,
+          guardianPhone: str("guardianPhone") || null,
+        },
+      });
+    });
+
+    revalidatePath("/student");
+    revalidatePath("/student/room");
+    return { success: true };
   } catch (e) {
     return { success: false, error: (e as Error).message };
   }
