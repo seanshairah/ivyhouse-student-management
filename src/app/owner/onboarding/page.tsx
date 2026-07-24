@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SendCredentialsPanel } from "@/components/owner/send-credentials-panel";
+import { AddStudentForm } from "@/components/owner/add-student-form";
 
 export const metadata = { title: "Onboarding" };
 
@@ -24,8 +25,10 @@ export default async function OwnerOnboardingPage() {
     <div className="space-y-6">
       <PageHeader
         title="Onboarding"
-        description="Send login credentials to imported students and track their onboarding."
-      />
+        description="Add students, send login credentials, and track onboarding."
+      >
+        <AddStudentForm />
+      </PageHeader>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Students" value={total} icon="Users" accent="blue" />

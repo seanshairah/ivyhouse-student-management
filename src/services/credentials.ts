@@ -1,6 +1,8 @@
 import { randomInt } from "crypto";
+import { PaymentMethod, PaymentStatus, StudentStatus, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth";
+import { generateReference } from "@/lib/utils";
 import { sendTemplatedEmail } from "@/services/email";
 import { sendStatusSMS } from "@/services/sms";
 import { EMAIL_SUBJECTS } from "@/constants/messages";
@@ -17,6 +19,96 @@ export function generateTempPassword(): string {
   let s = "";
   for (let i = 0; i < 6; i++) s += alphabet[randomInt(alphabet.length)];
   return `Ivy-${s}`;
+}
+
+export interface CreateStudentInput {
+  fullName: string;
+  email: string;
+  phone?: string | null;
+  deposit?: number | null;
+}
+
+/**
+ * Provision a student account: a User (role STUDENT) with a temporary password
+ * + mustChangePassword, a StudentProfile in the house, and — if a deposit was
+ * paid — a paid CASH deposit payment. Reuses an existing user by email (email
+ * is unique) instead of duplicating. Returns the profile id + temp password.
+ *
+ * This is the single "create a student" routine shared by the bulk import and
+ * the owner's manual add — the downstream flow (credentials, forced password
+ * change, onboarding) is identical either way.
+ */
+export async function createStudentAccount(
+  input: CreateStudentInput,
+): Promise<{ studentProfileId: string; tempPassword: string; reused: boolean }> {
+  const email = input.email.toLowerCase().trim();
+  const tempPassword = generateTempPassword();
+  const passwordHash = await hashPassword(tempPassword);
+  const house = await prisma.house.findFirst({ select: { id: true } });
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  const user = existing
+    ? await prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name: input.fullName,
+          phone: input.phone ?? undefined,
+          role: UserRole.STUDENT,
+          isActive: true,
+          passwordHash,
+          mustChangePassword: true,
+        },
+      })
+    : await prisma.user.create({
+        data: {
+          email,
+          name: input.fullName,
+          phone: input.phone ?? null,
+          role: UserRole.STUDENT,
+          passwordHash,
+          mustChangePassword: true,
+        },
+      });
+
+  const profile = await prisma.studentProfile.upsert({
+    where: { userId: user.id },
+    update: { fullName: input.fullName, email, phone: input.phone ?? "" },
+    create: {
+      userId: user.id,
+      fullName: input.fullName,
+      email,
+      phone: input.phone ?? "",
+      status: StudentStatus.PROSPECT,
+      houseId: house?.id ?? null,
+    },
+  });
+
+  if (input.deposit && input.deposit > 0) {
+    const already = await prisma.payment.count({
+      where: { studentProfileId: profile.id, reference: { startsWith: "DEP-" } },
+    });
+    if (already === 0) {
+      await prisma.payment.create({
+        data: {
+          reference: generateReference("DEP"),
+          studentProfileId: profile.id,
+          amount: input.deposit,
+          method: PaymentMethod.CASH,
+          status: PaymentStatus.PAID,
+          paidAt: new Date(),
+        },
+      });
+    }
+  }
+
+  await audit({
+    action: "student.created",
+    entityType: "StudentProfile",
+    entityId: profile.id,
+    metadata: { email, reused: Boolean(existing) },
+  }).catch(() => undefined);
+
+  return { studentProfileId: profile.id, tempPassword, reused: Boolean(existing) };
 }
 
 export interface CredentialSendResult {
