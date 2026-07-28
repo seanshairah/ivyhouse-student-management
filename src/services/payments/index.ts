@@ -282,14 +282,24 @@ export async function createSelfPayment(opts: {
       amount,
       category,
       method: "PAYNOW",
-      status: PaymentStatus.PENDING,
+      // Only stay PENDING if Paynow actually took it, or the outcome is
+      // uncertain. A hard decline used to be written as PENDING with no poll
+      // URL, which left a payment request stuck "in progress" forever —
+      // nothing could ever settle it and nothing cleared it away.
+      status: r.ok || r.ambiguous ? PaymentStatus.PENDING : PaymentStatus.FAILED,
       paymentLink: r.redirectUrl,
       transaction: {
         create: {
           provider: "paynow",
           pollUrl: r.pollUrl,
           providerRef: r.providerRef,
-          rawStatus: r.mode === "development" ? "mock-initiated" : "initiated",
+          rawStatus: r.ok
+            ? r.mode === "development"
+              ? "mock-initiated"
+              : "initiated"
+            : r.ambiguous
+              ? "uncertain"
+              : (r.providerError ?? r.error ?? "declined"),
         },
       },
     },

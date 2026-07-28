@@ -12,6 +12,7 @@ import {
 import { canAccessPayment } from "@/core/auth/access";
 import { rateLimit, PAYMENT_LIMIT } from "@/core/auth/rate-limit";
 import { audit } from "@/services/audit";
+import { cancelUnclearedPayment } from "@/core/billing/uncleared";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -494,6 +495,41 @@ export async function messageOwnerAction(
     }).catch(() => undefined);
 
     revalidatePath("/student/messages");
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Cancel a payment the student started and never completed.
+ *
+ * Only their own, and only one that is still in flight — cancelUnclearedPayment
+ * refuses anything already settled, so this can never be used to make a paid
+ * payment disappear.
+ */
+export async function cancelPaymentAction(reference: string): Promise<ActionResult> {
+  const session = await requireRole("STUDENT");
+  if (!reference) return { success: false, error: "Missing payment reference" };
+  try {
+    const owns = await assertOwnsPayment(session.userId, reference);
+    if (!owns.ok) return { success: false, error: owns.error };
+
+    const r = await cancelUnclearedPayment(reference, {
+      actorId: session.userId,
+      reason: "cancelled-by-student",
+    });
+    if (!r.ok) return { success: false, error: r.error };
+
+    await audit({
+      userId: session.userId,
+      actorEmail: session.email,
+      action: "payment.cancelled",
+      metadata: { reference, by: "student" },
+    }).catch(() => undefined);
+
+    revalidatePath("/student/payments");
+    revalidatePath("/student");
     return { success: true };
   } catch (e) {
     return { success: false, error: (e as Error).message };
