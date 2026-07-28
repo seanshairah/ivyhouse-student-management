@@ -302,6 +302,47 @@ Take a database snapshot first. The backfill is additive — it inserts `Charge`
 and `PaymentAllocation` rows and renames one column — but the rename is not
 reversible without a restore.
 
+### Applying to a database built with `db push`
+
+Both production databases were created with `prisma db push` and had no
+`_prisma_migrations` table. The delta migration is written to be **idempotent
+and re-runnable** (`DO $mig$` guards, `IF NOT EXISTS`, `ON CONFLICT`) because
+the two were not in identical states — one already carried `transportOptIn`
+while the other still had `usesTransport`. Record the baseline as applied, then
+deploy:
+
+```bash
+npx prisma migrate resolve --applied 20260728000000_init
+npx prisma migrate deploy
+```
+
+The backfill also repairs money the old schema could not see:
+
+| Step | What it fixes |
+|---|---|
+| Invoices → charges | balances stop reading zero after the cutover |
+| Paid payments with **no invoice** → charge + allocation | self-service payments and hand-recorded deposits become countable |
+| Receipts for paid payments that had none | students get proof of payment |
+| `PENDING` older than 24h → `CANCELLED` | dashboards stop showing a payment "in progress" forever |
+
+After migrating, every dollar received should equal every dollar allocated:
+
+```sql
+SELECT (SELECT COALESCE(SUM(amount),0) FROM "Payment" WHERE status = 'PAID') AS received,
+       (SELECT COALESCE(SUM(amount),0) FROM "PaymentAllocation")             AS allocated;
+```
+
+### Test accounts
+
+Seeded test students are prefixed `test_` and can be removed with:
+
+```sql
+DELETE FROM "Charge"  WHERE "studentProfileId" = 'test_profile_seed';
+DELETE FROM "Payment" WHERE "studentProfileId" = 'test_profile_seed';
+DELETE FROM "StudentProfile" WHERE id = 'test_profile_seed';
+DELETE FROM "User"           WHERE id = 'test_user_seed';
+```
+
 ### Rollback
 
 The previous release runs against the migrated schema: the new tables are
