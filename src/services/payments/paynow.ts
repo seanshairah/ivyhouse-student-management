@@ -206,14 +206,60 @@ export function getPaynowConfig(): PaynowConfig {
     );
   }
 
+  // returnUrl/resultUrl used to default straight to a literal localhost
+  // address. That is invisible in every way that matters — the integration
+  // request still succeeds, the student still reaches Paynow's checkout, the
+  // payment still gets taken — right up until Paynow's servers try to POST the
+  // result to a URL that only exists on a developer's laptop. APP_URL is
+  // already the deployment's real public URL everywhere else in this codebase
+  // (receipt links, password resets, application emails), so it is the right
+  // fallback here too, ahead of the hardcoded localhost default.
+  const appUrl = (process.env.APP_URL || "").trim().replace(/\/+$/, "");
+  const returnUrl =
+    process.env.PAYNOW_RETURN_URL ||
+    (appUrl ? `${appUrl}/student/payments/return` : "http://localhost:3000/student/payments/return");
+  const resultUrl =
+    process.env.PAYNOW_RESULT_URL ||
+    (appUrl ? `${appUrl}/api/payments/paynow/result` : "http://localhost:3000/api/payments/paynow/result");
+
+  // Not fail-closed like the credentials check above: a payment initiated
+  // under this can still be recovered by reconcileAndExpirePayments(), so
+  // refusing to run entirely would be a worse outage than the bug it guards
+  // against. Loud enough to find in the deploy's logs regardless.
+  if (process.env.NODE_ENV === "production" && /localhost|127\.0\.0\.1/.test(resultUrl)) {
+    console.error(
+      "[paynow] resultUrl resolves to localhost in production — Paynow's " +
+        "servers cannot reach it, so payments will only settle via the daily " +
+        "reconciliation sweep, never immediately. Set APP_URL or PAYNOW_RESULT_URL.",
+    );
+  }
+
   return {
     integrationId,
     integrationKey,
-    returnUrl: process.env.PAYNOW_RETURN_URL || "http://localhost:3000/student/payments/return",
-    resultUrl: process.env.PAYNOW_RESULT_URL || "http://localhost:3000/api/payments/paynow/result",
+    returnUrl,
+    resultUrl,
     mode: process.env.PAYNOW_MODE === "live" && hasCredentials ? "live" : "development",
     currency: PAYNOW_CURRENCY,
   };
+}
+
+/**
+ * Paynow does not append anything to `returnurl` when it redirects the
+ * customer's browser back — confirmed by Paynow's own support staff on their
+ * developer forum: "It is expected that you will set enough information to be
+ * able to identify the transaction... returnurl: mywebsite.com/check/?myref=…".
+ *
+ * Every returnurl in this codebase used to be one fixed string, shared by
+ * every transaction. The return page reads `?ref=` to know which payment to
+ * verify; with nothing ever appended, it never had one, and could not settle
+ * ANY payment via the browser return — production confirms this: across both
+ * platforms exactly one payment has ever reached PAID, and only because it was
+ * force-reconciled by hand, three hours after the student paid.
+ */
+function returnUrlFor(baseUrl: string, reference: string): string {
+  const sep = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${sep}ref=${encodeURIComponent(reference)}`;
 }
 
 export interface InitiatePaymentInput {
@@ -334,7 +380,7 @@ export async function createPaynowPayment(
       reference: input.reference,
       amount: input.amount.toFixed(2),
       additionalinfo: input.description,
-      returnurl: config.returnUrl,
+      returnurl: returnUrlFor(config.returnUrl, input.reference),
       resulturl: config.resultUrl,
       authemail: input.authEmailOverride ?? resolveAuthEmail(input.email),
       status: "Message",
@@ -433,7 +479,10 @@ export async function createPaynowMobilePayment(
       reference: input.reference,
       amount: input.amount.toFixed(2),
       additionalinfo: input.description,
-      returnurl: config.returnUrl,
+      // Express (EcoCash/OneMoney) never redirects the browser — Paynow POSTs
+      // straight to resulturl — but a per-transaction returnurl is harmless to
+      // send and keeps this identical to the web path for any method that does.
+      returnurl: returnUrlFor(config.returnUrl, input.reference),
       resulturl: config.resultUrl,
       authemail: input.authEmailOverride ?? resolveAuthEmail(input.email),
       phone: toLocalZwPhone(input.phone),
