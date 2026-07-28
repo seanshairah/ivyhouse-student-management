@@ -343,6 +343,30 @@ DELETE FROM "StudentProfile" WHERE id = 'test_profile_seed';
 DELETE FROM "User"           WHERE id = 'test_user_seed';
 ```
 
+### Renaming a column on a live database
+
+`20260728000100` renamed `usesTransport` to `transportOptIn`. That rename is
+correct but **not backwards compatible**: a deployment still running the
+previous build has a Prisma client that names the old column explicitly in its
+SELECT lists, so every query touching `StudentProfile` fails the moment the
+rename lands — the live site returns "Something went wrong" until the new build
+ships. Migrating the database ahead of the code is normally safe; a rename is
+the exception.
+
+`20260728000300` is the fix, and the pattern to copy next time: **expand /
+contract**. Both column names exist, kept in lockstep by a trigger, so old and
+new code run against the same database at once and deploy order stops mattering.
+
+Once BOTH platforms are deployed on the new build, run the contract step:
+
+```sql
+DROP TRIGGER IF EXISTS student_transport_sync ON "StudentProfile";
+DROP FUNCTION IF EXISTS sync_student_transport();
+ALTER TABLE "StudentProfile" DROP COLUMN IF EXISTS "usesTransport";
+```
+
+Until then, leave it in place.
+
 ### Rollback
 
 The previous release runs against the migrated schema: the new tables are
