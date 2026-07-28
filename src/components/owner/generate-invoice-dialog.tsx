@@ -52,6 +52,27 @@ export function GenerateInvoiceDialog({ studentProfileId }: { studentProfileId: 
         <form action={onSubmit} className="space-y-4">
           <input type="hidden" name="studentProfileId" value={studentProfileId} />
           <div className="space-y-1.5">
+            <Label htmlFor="category">What is this for?</Label>
+            {/* Explicit, not guessed. The category decides which balance the
+                charge lands in — rent, transport or deposit — so it can no
+                longer be inferred from whatever wording is typed below. */}
+            <select
+              id="category"
+              name="category"
+              defaultValue="RENT"
+              required
+              className="h-10 w-full rounded-xl border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="RENT">Rent</option>
+              <option value="TRANSPORT">Transport</option>
+              <option value="DEPOSIT">Booking deposit</option>
+              <option value="PENALTY">Penalty / late fee</option>
+              <option value="ADJUSTMENT">Adjustment</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
             <Label htmlFor="description">Description</Label>
             <Input id="description" name="description" placeholder="e.g. Accommodation — March" required />
           </div>

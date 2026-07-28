@@ -13,7 +13,14 @@ import {
   failPayment,
   canTransition,
 } from "@/services/payments";
-import { getStudentAccount } from "@/core/billing/ledger";
+import {
+  getStudentAccount,
+  raiseCharge,
+  allocatePayment,
+  getPaymentBreakdown,
+} from "@/core/billing/ledger";
+import { createInvoice } from "@/services/invoices";
+import { recordManualPayment } from "@/core/billing/deposits";
 
 /**
  * End-to-end payment tests.
@@ -286,5 +293,240 @@ describe("payment state machine", () => {
     // The charge stands — the student still owes the rent they tried to pay.
     const account = await getStudentAccount(profileId);
     expect(account.rent.outstanding).toBe(120);
+  });
+});
+
+describe("charges raised by an administrator", () => {
+  it("moves the student's balance when an invoice is created", async () => {
+    // An invoice is the document; the charge is the debt. Creating an invoice
+    // without a charge used to print and email correctly while the student's
+    // balance stayed exactly where it was.
+    await createInvoice({
+      studentProfileId: profileId,
+      description: "Booking deposit",
+      amount: 50,
+      category: ChargeCategory.DEPOSIT,
+      dueInDays: 7,
+    });
+
+    const account = await getStudentAccount(profileId);
+    expect(account.other.outstanding).toBe(50);
+    expect(account.totalOutstanding).toBe(50);
+    // A deposit is not rent and must not show up as rent.
+    expect(account.rent.outstanding).toBe(0);
+  });
+
+  it("keeps an administrator's transport charge out of the rent balance", async () => {
+    await createInvoice({
+      studentProfileId: profileId,
+      description: "Transport — March",
+      amount: 15,
+      category: ChargeCategory.TRANSPORT,
+    });
+
+    const account = await getStudentAccount(profileId);
+    expect(account.transport.outstanding).toBe(15);
+    expect(account.rent.outstanding).toBe(0);
+  });
+});
+
+describe("receipts say what the money was for", () => {
+  it("describes a deposit as a deposit, not as accommodation", async () => {
+    // The majority of real payments are deposits recorded by the office. The
+    // receipt used to read "Accommodation payment" for every one of them.
+    const charge = await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.DEPOSIT,
+      description: "Booking deposit",
+      amount: 20,
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        reference: `RCT-TEST-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 20,
+        category: ChargeCategory.DEPOSIT,
+        status: PaymentStatus.PAID,
+        paidAt: new Date(),
+      },
+    });
+    await allocatePayment(payment.id);
+
+    const breakdown = await getPaymentBreakdown(payment.id);
+    expect(breakdown.total).toBe(20);
+    expect(breakdown.lines).toHaveLength(1);
+    expect(breakdown.lines[0].category).toBe(ChargeCategory.DEPOSIT);
+    expect(breakdown.lines[0].label).toContain("Deposit");
+    expect(breakdown.lines[0].description).toBe("Booking deposit");
+    expect(charge.id).toBeTruthy();
+  });
+
+  it("itemises a payment that covered both rent and transport", async () => {
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 120,
+    });
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.TRANSPORT,
+      description: "Transport — March",
+      amount: 15,
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        reference: `RCT-COMBI-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 135,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.PAID,
+        paidAt: new Date(),
+      },
+    });
+    await allocatePayment(payment.id);
+
+    const breakdown = await getPaymentBreakdown(payment.id);
+    const cats = breakdown.lines.map((l) => l.category).sort();
+    expect(cats).toEqual([ChargeCategory.RENT, ChargeCategory.TRANSPORT].sort());
+    expect(breakdown.lines.reduce((s, l) => s + l.amount, 0)).toBe(135);
+  });
+
+  it("shows unapplied money as credit rather than inventing a line for it", async () => {
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 100,
+    });
+    const payment = await prisma.payment.create({
+      data: {
+        reference: `RCT-OVER-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 150,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.PAID,
+        paidAt: new Date(),
+      },
+    });
+    await allocatePayment(payment.id);
+
+    const breakdown = await getPaymentBreakdown(payment.id);
+    expect(breakdown.lines.reduce((s, l) => s + l.amount, 0)).toBe(100);
+    expect(breakdown.unapplied).toBe(50);
+  });
+});
+
+describe("cash deposits recorded by the office", () => {
+  it("categorises the deposit, settles it and issues a receipt", async () => {
+    // The busiest path in both platforms. One used to write a bare Payment row
+    // with no receipt at all; the other issued a receipt but left the category
+    // at OTHER, so the owner's "deposits collected" total read zero.
+    const result = await recordManualPayment({
+      studentProfileId: profileId,
+      amount: 20,
+    });
+    expect(result).not.toBeNull();
+
+    expect(result!.charge.category).toBe(ChargeCategory.DEPOSIT);
+    expect(result!.payment.category).toBe(ChargeCategory.DEPOSIT);
+    expect(result!.payment.status).toBe(PaymentStatus.PAID);
+    expect(result!.receipt.number).toMatch(/^RCT-/);
+
+    // Settled on arrival: it is money already received, not money owed.
+    const account = await getStudentAccount(profileId);
+    expect(account.other.outstanding).toBe(0);
+    expect(account.other.paid).toBe(20);
+    expect(account.totalOutstanding).toBe(0);
+    // And it must not be mistaken for rent.
+    expect(account.rent.outstanding).toBe(0);
+  });
+
+  it("shows the deposit as a deposit on the receipt", async () => {
+    const result = await recordManualPayment({
+      studentProfileId: profileId,
+      amount: 40,
+    });
+    const breakdown = await getPaymentBreakdown(result!.payment.id);
+    expect(breakdown.lines[0].category).toBe(ChargeCategory.DEPOSIT);
+    expect(breakdown.lines[0].label).toContain("Deposit");
+    expect(breakdown.unapplied).toBe(0);
+  });
+
+  it("does not double-record a deposit for the same student", async () => {
+    const first = await recordManualPayment({
+      studentProfileId: profileId,
+      amount: 20,
+      onlyIfNone: true,
+    });
+    const second = await recordManualPayment({
+      studentProfileId: profileId,
+      amount: 20,
+      onlyIfNone: true,
+    });
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+
+    const payments = await prisma.payment.findMany({
+      where: { studentProfileId: profileId, category: ChargeCategory.DEPOSIT },
+    });
+    expect(payments).toHaveLength(1);
+  });
+
+  it("counts toward the owner's deposit revenue figure", async () => {
+    await recordManualPayment({ studentProfileId: profileId, amount: 30 });
+    const byCategory = await prisma.payment.groupBy({
+      by: ["category"],
+      where: { studentProfileId: profileId, status: PaymentStatus.PAID },
+      _sum: { amount: true },
+    });
+    const deposits = byCategory.find((r) => r.category === ChargeCategory.DEPOSIT);
+    expect(Number(deposits?._sum.amount ?? 0)).toBe(30);
+  });
+});
+
+describe("a student with no room", () => {
+  it("cannot be charged rent for accommodation they were never given", async () => {
+    const user = await prisma.user.create({
+      data: {
+        email: `noroom-${Date.now()}-${counter++}@test.local`,
+        passwordHash: "x",
+        name: "No Room",
+        role: "STUDENT",
+      },
+    });
+    const roomless = await prisma.studentProfile.create({
+      data: {
+        userId: user.id,
+        fullName: "No Room",
+        email: user.email,
+        phone: "0771234567",
+        houseId,
+      },
+    });
+
+    // monthlyRentFor() falls back to the platform default, so without this
+    // guard the student would be billed $120 for a room they don't have.
+    const rent = await createSelfPayment({
+      profileId: roomless.id,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    expect(rent.ok).toBe(false);
+    expect(rent.error).toContain("room");
+
+    const charges = await prisma.charge.findMany({
+      where: { studentProfileId: roomless.id },
+    });
+    expect(charges).toHaveLength(0);
+
+    // Transport does not depend on a room, so it stays available.
+    const transport = await createSelfPayment({
+      profileId: roomless.id,
+      purpose: "TRANSPORT_MONTH",
+      method: "web",
+    });
+    expect(transport.ok).toBe(true);
+    expect(transport.amount).toBe(15);
   });
 });

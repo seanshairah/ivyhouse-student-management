@@ -15,6 +15,7 @@ const NAV: ShellNavItem[] = [
   { label: "Payments", href: "/owner/payments", icon: "CreditCard" },
   { label: "Invoices", href: "/owner/invoices", icon: "ReceiptText" },
   { label: "Reports", href: "/owner/reports", icon: "BarChart3" },
+  { label: "Needs attention", href: "/owner/data-quality", icon: "AlertTriangle" },
   { label: "Services", href: "/owner/services", icon: "Wrench" },
   { label: "Messages", href: "/owner/messages", icon: "MessageSquare" },
   { label: "Settings", href: "/owner/settings", icon: "Settings" },

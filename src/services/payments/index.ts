@@ -6,6 +6,7 @@ import {
   ApplicationType,
   RoomStatus,
   ChargeStatus,
+  ChargeCategory,
   type Prisma,
 } from "@prisma/client";
 import { generateReference, formatCurrency, formatDate, toNumber } from "@/lib/utils";
@@ -49,9 +50,12 @@ export async function generatePaymentLink(
   const notify = opts?.notify !== false;
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { studentProfile: true },
+    include: { studentProfile: true, charges: { select: { category: true } } },
   });
   if (!invoice) throw new Error("Invoice not found");
+  // Carry the invoice's category onto the payment so revenue reporting can
+  // split rent from transport before the allocations exist.
+  const category = invoice.charges[0]?.category ?? ChargeCategory.OTHER;
 
   const outstanding = toNumber(invoice.amount) - toNumber(invoice.amountPaid);
   const reference = generateReference("PAY");
@@ -69,6 +73,7 @@ export async function generatePaymentLink(
       studentProfileId: invoice.studentProfileId,
       invoiceId: invoice.id,
       amount: outstanding,
+      category,
       status: PaymentStatus.PENDING,
       paymentLink: paynow.redirectUrl,
       transaction: {
@@ -140,6 +145,21 @@ export async function createSelfPayment(opts: {
     include: { room: true },
   });
   if (!profile) return { ok: false, error: "Student profile not found" };
+
+  // Rent needs a room. Without one, monthlyRentFor() falls back to the
+  // platform default and we would invent a rent debt for accommodation the
+  // student has not actually been given — a real risk, since a large share of
+  // students on both platforms are onboarded but not yet allocated a room.
+  // Transport is independent of a room, so that stays available.
+  const isRent = opts.purpose === "RENT_MONTH" || opts.purpose === "RENT_SEMESTER";
+  if (isRent && !profile.room) {
+    return {
+      ok: false,
+      error:
+        "You don't have a room assigned yet, so there's no rent to pay. " +
+        "Please contact the office — they'll allocate your room first.",
+    };
+  }
 
   // The amount is computed here, on the server, from the student's own room and
   // the platform's configured rates. The browser only ever sends a purpose.

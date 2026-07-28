@@ -199,7 +199,14 @@ export interface RaiseChargeInput {
   invoiceId?: string | null;
 }
 
-/** Raise a new charge against a student. */
+/**
+ * Raise a new charge against a student.
+ *
+ * If the student is holding credit — money received that no charge existed for
+ * at the time — it is applied to this charge immediately. Without that sweep,
+ * an overpayment sits on the account forever while the student is dunned for
+ * the very next bill they have already covered.
+ */
 export async function raiseCharge(
   input: RaiseChargeInput,
   client: Prisma.TransactionClient = prisma,
@@ -207,7 +214,7 @@ export async function raiseCharge(
   if (!(input.amount > 0)) {
     throw new Error("A charge amount must be greater than zero.");
   }
-  return client.charge.create({
+  const charge = await client.charge.create({
     data: {
       studentProfileId: input.studentProfileId,
       category: input.category,
@@ -220,6 +227,76 @@ export async function raiseCharge(
       status: ChargeStatus.OUTSTANDING,
     },
   });
+
+  await applyCreditToCharge(charge.id, client);
+  return charge;
+}
+
+/**
+ * Apply any credit the student is holding to one specific charge.
+ *
+ * Only ever ADDS allocations for money that is not yet applied — it never
+ * touches existing allocations, so it cannot disturb an already-settled charge
+ * or make settlement non-idempotent.
+ */
+export async function applyCreditToCharge(
+  chargeId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<number> {
+  const charge = await client.charge.findUnique({
+    where: { id: chargeId },
+    select: {
+      id: true,
+      studentProfileId: true,
+      amount: true,
+      status: true,
+      allocations: { select: { amount: true } },
+    },
+  });
+  if (!charge || charge.status !== ChargeStatus.OUTSTANDING) return 0;
+
+  const alreadyOnCharge = charge.allocations.reduce(
+    (sum, a) => sum + toNumber(a.amount),
+    0,
+  );
+  let owed = round2(toNumber(charge.amount) - alreadyOnCharge);
+  if (owed <= 0) return 0;
+
+  // Settled payments that still have money spare.
+  const payments = await client.payment.findMany({
+    where: { studentProfileId: charge.studentProfileId, status: PaymentStatus.PAID },
+    select: {
+      id: true,
+      amount: true,
+      allocations: { select: { amount: true } },
+    },
+    orderBy: { paidAt: "asc" },
+  });
+
+  let applied = 0;
+  for (const p of payments) {
+    if (owed <= 0) break;
+    const used = p.allocations.reduce((sum, a) => sum + toNumber(a.amount), 0);
+    const spare = round2(toNumber(p.amount) - used);
+    if (spare <= 0) continue;
+
+    const amount = round2(Math.min(spare, owed));
+    await client.paymentAllocation.upsert({
+      where: { paymentId_chargeId: { paymentId: p.id, chargeId: charge.id } },
+      create: { paymentId: p.id, chargeId: charge.id, amount },
+      update: { amount },
+    });
+    owed = round2(owed - amount);
+    applied = round2(applied + amount);
+  }
+
+  if (applied > 0 && owed <= 0) {
+    await client.charge.update({
+      where: { id: charge.id },
+      data: { status: ChargeStatus.SETTLED },
+    });
+  }
+  return applied;
 }
 
 /**
@@ -343,4 +420,88 @@ export async function deallocatePayment(
 /** Currency rounding. Amounts are Decimal(10,2) in the database. */
 export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Human label for a charge category, for receipts and statements. */
+export const CATEGORY_LABEL: Record<ChargeCategory, string> = {
+  [ChargeCategory.RENT]: "Rent",
+  [ChargeCategory.TRANSPORT]: "Transport",
+  [ChargeCategory.DEPOSIT]: "Deposit",
+  [ChargeCategory.PENALTY]: "Penalty",
+  [ChargeCategory.ADJUSTMENT]: "Adjustment",
+  [ChargeCategory.OTHER]: "Other",
+};
+
+export interface PaymentLine {
+  category: ChargeCategory;
+  /** Category label plus the charge's own description. */
+  label: string;
+  description: string;
+  amount: number;
+}
+
+export interface PaymentBreakdown {
+  total: number;
+  lines: PaymentLine[];
+  /** Money received that isn't applied to any charge yet. */
+  unapplied: number;
+}
+
+/**
+ * What a payment was actually FOR, derived from where the money landed.
+ *
+ * Receipts used to print the linked invoice's description, falling back to the
+ * words "Accommodation payment". Deposits and self-service payments have no
+ * invoice, so the majority of real receipts told the student they had paid for
+ * accommodation when they had in fact paid a booking deposit. The allocations
+ * know the truth, so read it from there.
+ */
+export async function getPaymentBreakdown(
+  paymentId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<PaymentBreakdown> {
+  const payment = await client.payment.findUnique({
+    where: { id: paymentId },
+    select: {
+      amount: true,
+      category: true,
+      invoice: { select: { description: true } },
+      allocations: {
+        select: {
+          amount: true,
+          charge: { select: { category: true, description: true } },
+        },
+        orderBy: { amount: "desc" },
+      },
+    },
+  });
+  if (!payment) return { total: 0, lines: [], unapplied: 0 };
+
+  const total = toNumber(payment.amount);
+
+  const lines: PaymentLine[] = payment.allocations.map((a) => ({
+    category: a.charge.category,
+    description: a.charge.description,
+    label: `${CATEGORY_LABEL[a.charge.category]} — ${a.charge.description}`,
+    amount: toNumber(a.amount),
+  }));
+
+  const applied = lines.reduce((sum, l) => sum + l.amount, 0);
+  const unapplied = round2(Math.max(0, total - applied));
+
+  // Nothing allocated yet: fall back to the payment's own category, which is
+  // set at initiation. Still better than a generic string.
+  if (lines.length === 0) {
+    const description =
+      payment.invoice?.description ?? CATEGORY_LABEL[payment.category];
+    lines.push({
+      category: payment.category,
+      description,
+      label: `${CATEGORY_LABEL[payment.category]} — ${description}`,
+      amount: total,
+    });
+    return { total, lines, unapplied: 0 };
+  }
+
+  return { total, lines, unapplied };
 }

@@ -24,6 +24,7 @@ import {
   ServiceRequestStatus,
   ServiceRequestCategory,
   ServiceRequestPriority,
+  ChargeCategory,
 } from "@prisma/client";
 import { generateReference } from "@/lib/utils";
 
@@ -332,10 +333,18 @@ export async function createStudentInvoice(
     const studentProfileId = String(formData.get("studentProfileId") || "");
     const description = String(formData.get("description") || "");
     const amount = Number(formData.get("amount") || 0);
+    const rawCategory = String(formData.get("category") || "OTHER");
     const generateLink = String(formData.get("generateLink") || "") === "on";
     if (!studentProfileId || !description || !amount) {
       throw new Error("All invoice fields are required");
     }
+    if (!(amount > 0)) throw new Error("Amount must be greater than zero");
+    // Only a real category may be stored — this decides which balance the
+    // charge lands in, so an unrecognised value must not fall through silently.
+    if (!Object.values(ChargeCategory).includes(rawCategory as ChargeCategory)) {
+      throw new Error("Choose what the charge is for");
+    }
+    const category = rawCategory as ChargeCategory;
     const settings = await prisma.settings.findUnique({
       where: { id: "singleton" },
     });
@@ -343,6 +352,7 @@ export async function createStudentInvoice(
       studentProfileId,
       description,
       amount,
+      category,
       dueInDays: settings?.paymentTermsDays ?? 7,
     });
     if (generateLink) {
@@ -352,7 +362,7 @@ export async function createStudentInvoice(
       action: "invoice.created",
       entityType: "Invoice",
       entityId: invoice.id,
-      metadata: { amount, generateLink },
+      metadata: { amount, category, generateLink },
     });
     revalidatePath(`/owner/students/${studentProfileId}`);
     revalidatePath("/owner/invoices");

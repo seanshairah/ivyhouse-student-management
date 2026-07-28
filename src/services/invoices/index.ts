@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { InvoiceStatus, ChargeCategory, type Prisma } from "@prisma/client";
 import { nextNumber } from "@/services/numbering";
-import { getStudentAccount } from "@/core/billing/ledger";
+import { getStudentAccount, raiseCharge } from "@/core/billing/ledger";
 import { toNumber } from "@/lib/utils";
 
 export interface CreateInvoiceInput {
@@ -10,9 +10,17 @@ export interface CreateInvoiceInput {
   description: string;
   amount: number;
   dueInDays?: number;
+  /** What the money is for. Drives which balance it lands in. */
+  category?: ChargeCategory;
 }
 
-/** Create an invoice with an auto-generated number. */
+/**
+ * Create an invoice, and the charge that actually makes the student owe it.
+ *
+ * The invoice is the *document*; the charge is the *debt*. Balances are derived
+ * from charges, so an invoice raised without one would print and email
+ * correctly while the student's balance stayed exactly where it was.
+ */
 export async function createInvoice(
   input: CreateInvoiceInput,
   tx: Prisma.TransactionClient = prisma,
@@ -21,7 +29,8 @@ export async function createInvoice(
   const dueDate = input.dueInDays
     ? new Date(Date.now() + input.dueInDays * 86400000)
     : null;
-  return tx.invoice.create({
+
+  const invoice = await tx.invoice.create({
     data: {
       number,
       studentProfileId: input.studentProfileId,
@@ -32,6 +41,20 @@ export async function createInvoice(
       dueDate,
     },
   });
+
+  await raiseCharge(
+    {
+      studentProfileId: input.studentProfileId,
+      category: input.category ?? ChargeCategory.OTHER,
+      description: input.description,
+      amount: input.amount,
+      dueDate,
+      invoiceId: invoice.id,
+    },
+    tx,
+  );
+
+  return invoice;
 }
 
 /** Recompute invoice status from its payments after a payment changes. */

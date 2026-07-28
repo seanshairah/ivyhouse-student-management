@@ -2,6 +2,15 @@ import { formatCurrency, formatDate, toNumber } from "@/lib/utils";
 import { prisma } from "@/lib/prisma";
 import { buildStatement } from "@/services/statements";
 import { getSettings } from "@/services/numbering";
+import { getPaymentBreakdown, CATEGORY_LABEL } from "@/core/billing/ledger";
+
+/** How a payment reached us, in words a student recognises. */
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  PAYNOW: "Paid online (Paynow)",
+  CASH: "Cash",
+  BANK_TRANSFER: "Bank transfer",
+  MANUAL: "Recorded by the office",
+};
 
 function docShell(title: string, inner: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"/>
@@ -70,18 +79,39 @@ export async function receiptHtml(receiptId: string): Promise<string | null> {
   if (!r) return null;
   const s = await getSettings();
   const sp = r.payment.studentProfile;
+
+  // What the money was actually for, read from the allocations rather than from
+  // a linked invoice. Most real payments are booking deposits with no invoice,
+  // and those receipts used to read "Accommodation payment".
+  const breakdown = await getPaymentBreakdown(r.payment.id);
+  const kinds = [...new Set(breakdown.lines.map((l) => l.category))];
+  const heading =
+    kinds.length === 1 ? `${CATEGORY_LABEL[kinds[0]]} receipt` : "Receipt";
+
+  const lineRows = breakdown.lines
+    .map(
+      (l) =>
+        `<tr><td><span class="pill">${CATEGORY_LABEL[l.category]}</span> ${l.description}</td>` +
+        `<td class="right">${formatCurrency(l.amount, s.currency)}</td></tr>`,
+    )
+    .join("");
+  const unappliedRow = breakdown.unapplied > 0
+    ? `<tr><td class="muted">Credit on account (not yet applied)</td>` +
+      `<td class="right">${formatCurrency(breakdown.unapplied, s.currency)}</td></tr>`
+    : "";
+
   return docShell(
-    `Receipt ${r.number}`,
-    `<div class="top"><div><div style="font-size:13px;opacity:.85">${s.businessName}</div><h1>Receipt</h1></div>
+    `${heading} ${r.number}`,
+    `<div class="top"><div><div style="font-size:13px;opacity:.85">${s.businessName}</div><h1>${heading}</h1></div>
      <div class="doc"><div style="font-size:18px;font-weight:700">${r.number}</div><div style="opacity:.85;font-size:13px">${formatDate(r.issuedAt)}</div></div></div>
      <div class="body">
        <div class="grid">
          <div><div class="muted">Received from</div><div style="font-weight:600">${sp.fullName}</div><div class="muted">${sp.email}</div></div>
-         <div><div class="muted">Accommodation</div><div style="font-weight:600">${sp.house?.name ?? "—"}</div><div class="muted">Room ${sp.room?.number ?? "—"}</div></div>
-         <div><div class="muted">Payment ref</div><div style="font-weight:600">${r.payment.reference}</div><div class="muted">${r.payment.method}</div></div>
+         <div><div class="muted">Accommodation</div><div style="font-weight:600">${sp.house?.name ?? "—"}</div><div class="muted">${sp.room?.number ? `Room ${sp.room.number}` : "Room not yet assigned"}</div></div>
+         <div><div class="muted">Payment ref</div><div style="font-weight:600">${r.payment.reference}</div><div class="muted">${PAYMENT_METHOD_LABEL[r.payment.method] ?? r.payment.method}</div></div>
        </div>
-       <table><thead><tr><th>Description</th><th class="right">Amount</th></tr></thead>
-       <tbody><tr><td>${r.payment.invoice?.description ?? "Accommodation payment"}</td><td class="right">${formatCurrency(toNumber(r.amount), s.currency)}</td></tr>
+       <table><thead><tr><th>What this paid for</th><th class="right">Amount</th></tr></thead>
+       <tbody>${lineRows}${unappliedRow}
        <tr><td class="right total">Total paid</td><td class="right total">${formatCurrency(toNumber(r.amount), s.currency)}</td></tr></tbody></table>
        <p class="muted" style="margin-top:24px"><span class="pill">PAID</span> &nbsp; Thank you for your payment.</p>
      </div>`,
@@ -92,16 +122,31 @@ export async function statementHtml(studentProfileId: string): Promise<string | 
   const data = await buildStatement(studentProfileId);
   if (!data) return null;
   const s = await getSettings();
-  const invRows = data.invoices
+  const chargeRows = data.charges
     .map(
-      (i) =>
-        `<tr><td>${formatDate(i.issuedAt)}</td><td>${i.number}</td><td>${i.description}</td><td>${i.status}</td><td class="right">${formatCurrency(i.amount, s.currency)}</td><td class="right">${formatCurrency(i.amountPaid, s.currency)}</td></tr>`,
+      (c) =>
+        `<tr><td>${formatDate(c.issuedAt)}</td>` +
+        `<td><span class="pill">${c.categoryLabel}</span></td>` +
+        `<td>${c.description}</td>` +
+        `<td>${c.dueDate ? formatDate(c.dueDate) : "—"}${c.overdue ? ' <strong style="color:#b4232a">overdue</strong>' : ""}</td>` +
+        `<td class="right">${formatCurrency(c.amount, s.currency)}</td>` +
+        `<td class="right">${formatCurrency(c.paid, s.currency)}</td>` +
+        `<td class="right">${formatCurrency(c.outstanding, s.currency)}</td></tr>`,
     )
     .join("");
+
+  const t = data.totals;
+  const splitRow = (label: string, v: { charged: number; paid: number; outstanding: number }) =>
+    v.charged === 0 && v.outstanding === 0
+      ? ""
+      : `<tr><td>${label}</td>` +
+        `<td class="right">${formatCurrency(v.charged, s.currency)}</td>` +
+        `<td class="right">${formatCurrency(v.paid, s.currency)}</td>` +
+        `<td class="right total">${formatCurrency(v.outstanding, s.currency)}</td></tr>`;
   const payRows = data.payments
     .map(
       (p) =>
-        `<tr><td>${formatDate(p.paidAt ?? p.createdAt)}</td><td>${p.reference}</td><td>${p.method}</td><td>${p.status}</td><td class="right">${formatCurrency(p.amount, s.currency)}</td></tr>`,
+        `<tr><td>${formatDate(p.paidAt ?? p.createdAt)}</td><td>${p.reference}</td><td>${PAYMENT_METHOD_LABEL[p.method] ?? p.method}</td><td>${p.status}</td><td class="right">${formatCurrency(p.amount, s.currency)}</td></tr>`,
     )
     .join("");
   return docShell(
@@ -111,20 +156,26 @@ export async function statementHtml(studentProfileId: string): Promise<string | 
      <div class="body">
        <div class="grid">
          <div><div class="muted">Student</div><div style="font-weight:600">${data.student.fullName}</div><div class="muted">${data.student.email}</div><div class="muted">${data.student.phone}</div></div>
-         <div><div class="muted">Accommodation</div><div style="font-weight:600">${data.student.house ?? "—"}</div><div class="muted">Room ${data.student.room ?? "—"}</div></div>
+         <div><div class="muted">Accommodation</div><div style="font-weight:600">${data.student.house ?? "—"}</div><div class="muted">${data.student.room ? `Room ${data.student.room}` : "Room not yet assigned"}</div></div>
          <div><div class="muted">Outstanding balance</div><div class="total">${formatCurrency(data.totals.balance, s.currency)}</div></div>
        </div>
-       <h3 style="margin:18px 0 0;font-size:15px">Invoices</h3>
-       <table><thead><tr><th>Date</th><th>Number</th><th>Description</th><th>Status</th><th class="right">Amount</th><th class="right">Paid</th></tr></thead>
-       <tbody>${invRows || '<tr><td colspan="6" class="muted">No invoices</td></tr>'}</tbody></table>
+       <h3 style="margin:18px 0 0;font-size:15px">Account summary</h3>
+       <table><thead><tr><th>Category</th><th class="right">Charged</th><th class="right">Paid</th><th class="right">Outstanding</th></tr></thead>
+       <tbody>
+         ${splitRow("Rent", t.rent)}
+         ${splitRow("Transport", t.transport)}
+         ${splitRow("Deposits &amp; other", t.other)}
+         <tr><td class="total">Total</td><td class="right total">${formatCurrency(t.totalDue, s.currency)}</td><td class="right total">${formatCurrency(t.totalPaid, s.currency)}</td><td class="right total">${formatCurrency(t.balance, s.currency)}</td></tr>
+       </tbody></table>
+       ${t.arrears > 0 ? `<p style="margin-top:10px;color:#b4232a;font-weight:600">${formatCurrency(t.arrears, s.currency)} of this is past its due date.</p>` : ""}
+       ${t.credit > 0 ? `<p class="muted" style="margin-top:10px">${formatCurrency(t.credit, s.currency)} is held on your account as credit.</p>` : ""}
+
+       <h3 style="margin:22px 0 0;font-size:15px">Charges</h3>
+       <table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Due</th><th class="right">Amount</th><th class="right">Paid</th><th class="right">Outstanding</th></tr></thead>
+       <tbody>${chargeRows || '<tr><td colspan="7" class="muted">No charges yet</td></tr>'}</tbody></table>
        <h3 style="margin:22px 0 0;font-size:15px">Payments</h3>
        <table><thead><tr><th>Date</th><th>Reference</th><th>Method</th><th>Status</th><th class="right">Amount</th></tr></thead>
        <tbody>${payRows || '<tr><td colspan="5" class="muted">No payments</td></tr>'}</tbody></table>
-       <table style="margin-top:18px"><tbody>
-         <tr><td class="right">Total invoiced</td><td class="right">${formatCurrency(data.totals.totalDue, s.currency)}</td></tr>
-         <tr><td class="right">Total paid</td><td class="right">${formatCurrency(data.totals.totalPaid, s.currency)}</td></tr>
-         <tr><td class="right total">Balance</td><td class="right total">${formatCurrency(data.totals.balance, s.currency)}</td></tr>
-       </tbody></table>
      </div>`,
   );
 }

@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { createSelfPayment, pollAndSettle } from "@/services/payments";
-import { isPaymentPurpose, type PaymentPurpose } from "@/core/billing/pricing";
+import {
+  isPaymentPurpose,
+  monthlyRentFor,
+  type PaymentPurpose,
+} from "@/core/billing/pricing";
 import { canAccessPayment } from "@/core/auth/access";
 import { rateLimit, PAYMENT_LIMIT } from "@/core/auth/rate-limit";
 import { requestRenewal } from "@/services/applications";
@@ -23,14 +27,25 @@ import {
 } from "@prisma/client";
 
 /**
- * Room options a student can pick during onboarding. Capacity drives how many
- * students share a room; price is the total monthly rent per student.
- * (Single rent is a placeholder until confirmed.)
+ * Room options a student can pick during onboarding.
+ *
+ * Prices come from the platform config rather than being written out again
+ * here — this table used to carry its own copy of the rent figures, so
+ * changing a rate in `src/platform/config.ts` silently left onboarding
+ * creating rooms at the old price.
  */
 const ROOM_SPEC: Record<string, { capacity: number; price: number; label: string }> = {
-  SINGLE: { capacity: 1, price: 120, label: "Single" },
-  SHARED_DOUBLE: { capacity: 2, price: 120, label: "2-bed sharing" },
-  SHARED_TRIPLE: { capacity: 3, price: 90, label: "3-bed sharing" },
+  SINGLE: { capacity: 1, price: monthlyRentFor(RoomType.SINGLE), label: "Single" },
+  SHARED_DOUBLE: {
+    capacity: 2,
+    price: monthlyRentFor(RoomType.SHARED_DOUBLE),
+    label: "2-bed sharing",
+  },
+  SHARED_TRIPLE: {
+    capacity: 3,
+    price: monthlyRentFor(RoomType.SHARED_TRIPLE),
+    label: "3-bed sharing",
+  },
 };
 
 type ActionResult = { success: boolean; error?: string };
@@ -301,6 +316,9 @@ export async function completeOnboardingAction(
           roomId: room.id,
           houseId,
           status: StudentStatus.ACTIVE,
+          // One-time stamp. The dashboard gate reads this rather than roomId,
+          // so a later room change cannot resend the student through onboarding.
+          onboardingCompletedAt: new Date(),
           transportOptIn: formData.get("transportOptIn") === "on",
           nextOfKinName,
           nextOfKinPhone,

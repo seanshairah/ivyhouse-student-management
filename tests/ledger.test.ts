@@ -376,3 +376,68 @@ describe("arrears", () => {
     expect(account.nextDueDate?.toDateString()).toBe(soon.toDateString());
   });
 });
+
+describe("credit is not left stranded", () => {
+  it("applies existing credit to the next charge raised", async () => {
+    // Student overpays: $150 against a $100 charge, leaving $50 credit.
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 100,
+    });
+    const payment = await paidPayment(150, ChargeCategory.RENT);
+    await allocatePayment(payment.id);
+
+    let account = await getStudentAccount(profileId);
+    expect(account.unallocatedCredit).toBe(50);
+
+    // Next month's rent is raised. The credit should reduce it, not sit idle
+    // while the student is chased for the full amount.
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — April",
+      amount: 120,
+    });
+
+    account = await getStudentAccount(profileId);
+    expect(account.rent.outstanding).toBe(70); // 120 - 50 credit
+    expect(account.unallocatedCredit).toBe(0);
+  });
+
+  it("settles a new charge outright when the credit covers it", async () => {
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 50,
+    });
+    const payment = await paidPayment(200, ChargeCategory.RENT);
+    await allocatePayment(payment.id);
+
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.TRANSPORT,
+      description: "Transport — April",
+      amount: 15,
+    });
+
+    const account = await getStudentAccount(profileId);
+    expect(account.transport.outstanding).toBe(0);
+    expect(account.totalOutstanding).toBe(0);
+    expect(account.unallocatedCredit).toBe(135); // 200 - 50 - 15
+  });
+
+  it("leaves a charge outstanding when there is no credit", async () => {
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 120,
+    });
+    const account = await getStudentAccount(profileId);
+    expect(account.rent.outstanding).toBe(120);
+    expect(account.unallocatedCredit).toBe(0);
+  });
+});
