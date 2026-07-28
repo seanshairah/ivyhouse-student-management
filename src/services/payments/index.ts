@@ -522,6 +522,41 @@ export async function resolveWebCheckout(
   return { kind: "redirect", url: r.redirectUrl };
 }
 
+const RETURN_FALLBACK_WINDOW_MINUTES = 30;
+
+/**
+ * Work out which payment the browser return page is looking at.
+ *
+ * Paynow does not append anything to `returnurl` when it redirects the
+ * customer back — the reference is embedded there ourselves (see
+ * `returnUrlFor` in ./paynow) precisely so this page can identify the
+ * payment. A payment already in flight when that shipped was built with the
+ * old, bare returnurl, so its already-issued Paynow checkout link will still
+ * redirect back with nothing.
+ *
+ * Falls back to the student's own most recent in-flight payment, scoped to
+ * `profileId` — so this can only ever resolve to a payment belonging to the
+ * student who is actually signed in, never to anyone else's — and only within
+ * a short window, since a payment older than a checkout session can plausibly
+ * take is not what a browser landing here right now is about.
+ */
+export async function resolveReturnReference(
+  ref: string | undefined | null,
+  profileId: string,
+): Promise<string | null> {
+  if (ref) return ref;
+  const recent = await prisma.payment.findFirst({
+    where: {
+      studentProfileId: profileId,
+      status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+      createdAt: { gte: new Date(Date.now() - RETURN_FALLBACK_WINDOW_MINUTES * 60_000) },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { reference: true },
+  });
+  return recent?.reference ?? null;
+}
+
 /**
  * Poll a payment's status (used by the EcoCash Express client). If Paynow
  * reports paid, settle it (idempotent). Returns a simple status string.

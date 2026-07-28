@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from "vitest";
 import {
   PrismaClient,
   ChargeCategory,
@@ -13,6 +13,7 @@ import {
   failPayment,
   canTransition,
   reconcileAndExpirePayments,
+  resolveReturnReference,
 } from "@/services/payments";
 import {
   getStudentAccount,
@@ -31,6 +32,8 @@ import {
   resolveAuthEmail,
   friendlyPaynowError,
   getPaynowConfig,
+  createPaynowPayment,
+  createPaynowMobilePayment,
   PAYNOW_CURRENCY,
 } from "@/services/payments/paynow";
 
@@ -960,6 +963,236 @@ describe("money is collected strictly in USD", () => {
       delete process.env.PAYNOW_USD_INTEGRATION_ID;
       delete process.env.PAYNOW_USD_INTEGRATION_KEY;
     }
+  });
+});
+
+describe("Paynow callback URLs must be reachable, not a developer's laptop", () => {
+  // PAYNOW_RETURN_URL / PAYNOW_RESULT_URL used to default straight to a
+  // literal "http://localhost:3000/..." string. That is invisible in every way
+  // that matters — checkout still initiates, the student still reaches
+  // Paynow — right up until Paynow's servers try to POST the result to an
+  // address that only exists on a developer's machine. In production this
+  // meant NOTHING ever settled automatically: across both platforms, exactly
+  // one payment has ever reached PAID, and only because it was reconciled by
+  // hand hours after the student paid.
+
+  afterEach(() => {
+    delete process.env.APP_URL;
+    delete process.env.PAYNOW_RETURN_URL;
+    delete process.env.PAYNOW_RESULT_URL;
+  });
+
+  it("derives both URLs from APP_URL when the Paynow-specific ones are unset", () => {
+    // .env sets PAYNOW_RETURN_URL/RESULT_URL for local development — clear
+    // them explicitly so this test exercises the fallback, not the override.
+    delete process.env.PAYNOW_RETURN_URL;
+    delete process.env.PAYNOW_RESULT_URL;
+    process.env.APP_URL = "https://ivyproperties.co.zw";
+    const config = getPaynowConfig();
+    expect(config.returnUrl).toBe("https://ivyproperties.co.zw/student/payments/return");
+    expect(config.resultUrl).toBe("https://ivyproperties.co.zw/api/payments/paynow/result");
+  });
+
+  it("still honours an explicit PAYNOW_RETURN_URL / PAYNOW_RESULT_URL over APP_URL", () => {
+    process.env.APP_URL = "https://ivyproperties.co.zw";
+    process.env.PAYNOW_RETURN_URL = "https://explicit.example/return";
+    process.env.PAYNOW_RESULT_URL = "https://explicit.example/result";
+    const config = getPaynowConfig();
+    expect(config.returnUrl).toBe("https://explicit.example/return");
+    expect(config.resultUrl).toBe("https://explicit.example/result");
+  });
+});
+
+describe("the return URL carries the payment's own reference", () => {
+  // Confirmed on Paynow's own developer forum, by Paynow staff: the browser is
+  // redirected to returnurl with NOTHING appended — no reference, no status,
+  // nothing. "It is expected that you will set enough information to be able
+  // to identify the transaction... returnurl: mywebsite.com/check/?myref=…".
+  // Every returnurl this codebase ever sent was one fixed string, shared by
+  // every transaction, with nothing appended — so the return page (which reads
+  // `?ref=`) could never identify which payment to verify, for any student,
+  // ever.
+
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    delete process.env.PAYNOW_MODE;
+    delete process.env.PAYNOW_INTEGRATION_ID;
+    delete process.env.PAYNOW_INTEGRATION_KEY;
+    delete process.env.PAYNOW_RETURN_URL;
+  });
+
+  it("embeds ?ref=<reference> in the returnurl sent for a web (hosted checkout) payment", async () => {
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+    process.env.PAYNOW_RETURN_URL = "https://example.test/student/payments/return";
+
+    let sentBody = "";
+    global.fetch = (async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body);
+      return {
+        text: async () =>
+          "status=Ok&browserurl=https://www.paynow.co.zw/x&pollurl=https://www.paynow.co.zw/poll&paynowreference=1",
+      } as Response;
+    }) as typeof fetch;
+
+    await createPaynowPayment({
+      reference: "PAY-TESTREF-WEB",
+      amount: 120,
+      email: "student@example.com",
+      description: "Test",
+    });
+
+    const sent = new URLSearchParams(sentBody);
+    expect(sent.get("returnurl")).toBe(
+      "https://example.test/student/payments/return?ref=PAY-TESTREF-WEB",
+    );
+  });
+
+  it("embeds ?ref=<reference> in the returnurl sent for a mobile-money payment too", async () => {
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+    process.env.PAYNOW_RETURN_URL = "https://example.test/student/payments/return";
+
+    let sentBody = "";
+    global.fetch = (async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body);
+      return {
+        text: async () => "status=Ok&pollurl=https://www.paynow.co.zw/poll&paynowreference=1",
+      } as Response;
+    }) as typeof fetch;
+
+    await createPaynowMobilePayment({
+      reference: "PAY-TESTREF-MOB",
+      amount: 15,
+      email: "student@example.com",
+      description: "Test",
+      phone: "0771234567",
+    });
+
+    const sent = new URLSearchParams(sentBody);
+    expect(sent.get("returnurl")).toBe(
+      "https://example.test/student/payments/return?ref=PAY-TESTREF-MOB",
+    );
+  });
+
+  it("appends with & rather than ? when the configured return URL already has a query string", async () => {
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+    process.env.PAYNOW_RETURN_URL = "https://example.test/return?brand=ivy";
+
+    let sentBody = "";
+    global.fetch = (async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body);
+      return {
+        text: async () =>
+          "status=Ok&browserurl=https://www.paynow.co.zw/x&pollurl=https://www.paynow.co.zw/poll&paynowreference=1",
+      } as Response;
+    }) as typeof fetch;
+
+    await createPaynowPayment({
+      reference: "PAY-TESTREF-QS",
+      amount: 120,
+      email: "student@example.com",
+      description: "Test",
+    });
+
+    const sent = new URLSearchParams(sentBody);
+    expect(sent.get("returnurl")).toBe("https://example.test/return?brand=ivy&ref=PAY-TESTREF-QS");
+  });
+
+  it("signs the request after the reference-bearing returnurl is built, not before", async () => {
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+    process.env.PAYNOW_RETURN_URL = "https://example.test/return";
+
+    let sentBody = "";
+    global.fetch = (async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body);
+      return {
+        text: async () =>
+          "status=Ok&browserurl=https://www.paynow.co.zw/x&pollurl=https://www.paynow.co.zw/poll&paynowreference=1",
+      } as Response;
+    }) as typeof fetch;
+
+    await createPaynowPayment({
+      reference: "PAY-TESTREF-HASH",
+      amount: 120,
+      email: "student@example.com",
+      description: "Test",
+    });
+
+    const sent = new URLSearchParams(sentBody);
+    // SHA-512 hex digest: 128 characters. Present at all means paynowHash()
+    // ran successfully over the final values object, reference-bearing
+    // returnurl included.
+    expect(sent.get("hash")).toMatch(/^[0-9A-F]{128}$/);
+  });
+});
+
+describe("resolving which payment the return page is looking at", () => {
+  it("uses ref verbatim when it is present", async () => {
+    const resolved = await resolveReturnReference("PAY-EXPLICIT", profileId);
+    expect(resolved).toBe("PAY-EXPLICIT");
+  });
+
+  it("falls back to the student's own most recent in-flight payment when ref is missing", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    const resolved = await resolveReturnReference(undefined, profileId);
+    expect(resolved).toBe(init.reference);
+  });
+
+  it("never resolves to a payment belonging to a different student", async () => {
+    const otherUser = await prisma.user.create({
+      data: {
+        email: `other-${Date.now()}-${counter++}@test.local`,
+        passwordHash: "x",
+        name: "Other Student",
+        role: "STUDENT",
+      },
+    });
+    const otherProfile = await prisma.studentProfile.create({
+      data: {
+        userId: otherUser.id,
+        fullName: "Other Student",
+        email: otherUser.email,
+        phone: "0771234567",
+        houseId,
+        roomId,
+      },
+    });
+    // Only the other student has an in-flight payment.
+    await createSelfPayment({
+      profileId: otherProfile.id,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+
+    const resolved = await resolveReturnReference(undefined, profileId);
+    expect(resolved).toBeNull();
+  });
+
+  it("ignores a payment old enough that it cannot plausibly be this checkout session", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    await prisma.payment.update({
+      where: { reference: init.reference! },
+      data: { createdAt: new Date(Date.now() - 90 * 60_000) },
+    });
+
+    const resolved = await resolveReturnReference(undefined, profileId);
+    expect(resolved).toBeNull();
   });
 });
 

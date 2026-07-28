@@ -2,6 +2,7 @@ import Link from "next/link";
 import { XCircle, AlertTriangle, CreditCard } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { resolveReturnReference } from "@/services/payments";
 import { confirmPaymentReturn } from "@/app/student/actions";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +24,9 @@ export default async function PaymentReturnPage({
     where: { userId: session.userId },
   });
 
-  if (!ref || !profile) {
+  const resolvedRef = profile ? await resolveReturnReference(ref, profile.id) : null;
+
+  if (!resolvedRef || !profile) {
     return (
       <div className="mx-auto max-w-lg space-y-6">
         <PageHeader title="Payment" />
@@ -45,11 +48,11 @@ export default async function PaymentReturnPage({
 
   // For non-cancelled returns, idempotently verify/settle the payment.
   if (!cancelled) {
-    await confirmPaymentReturn(ref);
+    await confirmPaymentReturn(resolvedRef);
   }
 
   const payment = await prisma.payment.findUnique({
-    where: { reference: ref },
+    where: { reference: resolvedRef },
     include: { receipt: true },
   });
 
