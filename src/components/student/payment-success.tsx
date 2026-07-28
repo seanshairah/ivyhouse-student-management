@@ -10,6 +10,15 @@ interface PaymentSuccessProps {
   amount: number;
   receiptNumber?: string | null;
   receiptId?: string | null;
+  /**
+   * What the student owes right now, after this payment. Money is allocated
+   * to the oldest outstanding debt first, so a payment made "for next
+   * semester" can settle an older charge instead of the one just raised for
+   * it — correct, but easy to misread as the payment not having registered.
+   * Showing the balance directly, right where the student is already
+   * looking, is what actually answers "did my deduction go through."
+   */
+  balanceAfter?: number;
 }
 
 /** Animated success state shown on the payment return page. */
@@ -17,6 +26,7 @@ export function PaymentSuccess({
   amount,
   receiptNumber,
   receiptId,
+  balanceAfter,
 }: PaymentSuccessProps) {
   return (
     <div className="flex flex-col items-center text-center">
@@ -65,6 +75,27 @@ export function PaymentSuccess({
         >
           Receipt <span className="font-semibold">{receiptNumber}</span>
         </motion.div>
+      )}
+
+      {typeof balanceAfter === "number" && (
+        <motion.p
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.44 }}
+          className="mt-3 text-sm text-muted-foreground"
+        >
+          {balanceAfter > 0 ? (
+            <>
+              You now owe{" "}
+              <span className="font-semibold text-foreground">
+                {formatCurrency(balanceAfter)}
+              </span>{" "}
+              in total.
+            </>
+          ) : (
+            "You're all paid up — nothing outstanding."
+          )}
+        </motion.p>
       )}
 
       <motion.div

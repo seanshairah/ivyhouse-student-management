@@ -133,14 +133,16 @@ export function EcocashPayDialog({
     startWeb(async () => {
       try {
         const res = await initiateSelfPaymentAction({ purpose, method: "web" });
-        if (res.success && res.redirectUrl) {
-          window.location.href = res.redirectUrl;
-          return;
-        }
-        // Started, but we were handed no link — an attempt already in flight
-        // that has no browser checkout of its own, for instance. The checkout
-        // route resolves one server-side and redirects, so send the student
-        // there rather than showing an error for something that is working.
+        // Always hand off through our own checkout route rather than jumping
+        // straight to res.redirectUrl. That used to assign a cross-origin
+        // Paynow URL to window.location.href from inside this transition, and
+        // for a brief moment before the browser actually finished navigating
+        // away, React would tear down the pending transition and surface the
+        // app's error boundary — a flash of "Something went wrong" right
+        // before the real redirect landed. Routing internally first keeps the
+        // whole hop same-origin: /student/payments/checkout resolves the
+        // Paynow link server-side and issues a clean HTTP redirect, with
+        // nothing left client-side to race.
         if (res.success && res.reference) {
           window.location.href = `/student/payments/checkout?ref=${encodeURIComponent(
             res.reference,
