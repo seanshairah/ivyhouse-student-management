@@ -11,6 +11,7 @@ import {
 } from "@/core/billing/pricing";
 import { canAccessPayment } from "@/core/auth/access";
 import { rateLimit, PAYMENT_LIMIT } from "@/core/auth/rate-limit";
+import { audit } from "@/services/audit";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -169,7 +170,18 @@ export async function initiateSelfPaymentAction(input: {
       method: input.method,
       phone: input.phone,
     });
-    if (!r.ok) return { success: false, error: r.error, reference: r.reference };
+    if (!r.ok) {
+      // Record why, so a failure that never reaches the Payment table still
+      // leaves a trace. Without this the only evidence lives in the hosting
+      // provider's function logs, which nobody looks at until it is too late.
+      await audit({
+        userId: session.userId,
+        actorEmail: session.email,
+        action: "payment.initiate_failed",
+        metadata: { purpose: input.purpose, method: input.method, reason: r.error ?? null },
+      }).catch(() => undefined);
+      return { success: false, error: r.error, reference: r.reference };
+    }
     revalidatePath("/student/payments");
     return {
       success: true,
@@ -179,7 +191,23 @@ export async function initiateSelfPaymentAction(input: {
       amount: r.amount,
     };
   } catch (e) {
-    return { success: false, error: (e as Error).message };
+    // Never let an exception escape a payment action: an unhandled rejection
+    // in the browser takes the whole page to the error boundary, so the student
+    // sees a blank "Something went wrong" moments after pressing pay.
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("[payment.initiate] unhandled", detail);
+    await audit({
+      userId: session.userId,
+      actorEmail: session.email,
+      action: "payment.initiate_error",
+      metadata: { purpose: input.purpose, method: input.method, detail },
+    }).catch(() => undefined);
+    return {
+      success: false,
+      error:
+        "We couldn't start the payment. No money has left your account — " +
+        "please try again, or contact the office if it keeps happening.",
+    };
   }
 }
 

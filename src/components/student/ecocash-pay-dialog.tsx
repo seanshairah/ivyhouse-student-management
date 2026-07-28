@@ -102,28 +102,46 @@ export function EcocashPayDialog({
 
   function sendPrompt() {
     startTransition(async () => {
-      const res = await initiateSelfPaymentAction({ purpose, method: "ecocash", phone });
-      if (res.success && res.reference) {
-        setPhase("prompted");
-        setMessage(
-          res.instructions ||
-            "Check your phone and enter your EcoCash PIN to approve the payment.",
-        );
-        beginPolling(res.reference);
-      } else {
+      // A throw here used to escape as an unhandled rejection and take the
+      // whole page to the error boundary — a blank "Something went wrong"
+      // instead of a message in this dialog, right after the student pressed
+      // pay. A failed payment must never blank the screen.
+      try {
+        const res = await initiateSelfPaymentAction({ purpose, method: "ecocash", phone });
+        if (res.success && res.reference) {
+          setPhase("prompted");
+          setMessage(
+            res.instructions ||
+              "Check your phone and enter your EcoCash PIN to approve the payment.",
+          );
+          beginPolling(res.reference);
+        } else {
+          setPhase("failed");
+          setMessage(res.error || "Could not start the payment.");
+        }
+      } catch {
         setPhase("failed");
-        setMessage(res.error || "Could not start the payment.");
+        setMessage(
+          "We couldn't reach the payment service. No money has left your account — " +
+            "please try again, or contact the office if it keeps happening.",
+        );
       }
     });
   }
 
   function payOnline() {
     startWeb(async () => {
-      const res = await initiateSelfPaymentAction({ purpose, method: "web" });
-      if (res.success && res.redirectUrl) {
-        window.location.href = res.redirectUrl;
-      } else {
+      try {
+        const res = await initiateSelfPaymentAction({ purpose, method: "web" });
+        if (res.success && res.redirectUrl) {
+          window.location.href = res.redirectUrl;
+          return;
+        }
         toast.error(res.error || "Could not open the payment page.");
+      } catch {
+        toast.error(
+          "We couldn't reach the payment service. No money has left your account.",
+        );
       }
     });
   }
