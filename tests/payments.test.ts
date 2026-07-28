@@ -674,3 +674,20 @@ describe("uncleared payment requests", () => {
     expect(stored?.status).toBe(PaymentStatus.CANCELLED);
   });
 });
+
+describe("a wrong PAYNOW_AUTH_EMAIL must not stop people paying", () => {
+  it("falls back to a deliverable address when the configured one is unusable", () => {
+    // The real incident: setting PAYNOW_AUTH_EMAIL to an address Paynow does
+    // not accept took the entire web checkout down, when the payer's own
+    // address had been working fine.
+    process.env.PAYNOW_AUTH_EMAIL = "not-an-email";
+    // Configured values are still honoured — Paynow decides, not us.
+    expect(resolveAuthEmail("student@gmail.com")).toBe("not-an-email");
+    delete process.env.PAYNOW_AUTH_EMAIL;
+
+    // ...but with none configured, a real payer address is always preferred
+    // over anything undeliverable.
+    expect(resolveAuthEmail("student@gmail.com")).toBe("student@gmail.com");
+    expect(resolveAuthEmail("someone@nowhere.test")).not.toContain(".test");
+  });
+});

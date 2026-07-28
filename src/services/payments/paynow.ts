@@ -58,6 +58,31 @@ export function resolveAuthEmail(payerEmail?: string | null): string {
 }
 
 /**
+ * A second address to try when Paynow rejects the first one.
+ *
+ * Setting PAYNOW_AUTH_EMAIL to an address Paynow does not accept took the
+ * entire web checkout down — it had been working using each payer's own
+ * address, and one wrong environment variable silently broke every payment.
+ * A misconfigured setting should degrade, not stop people paying, so on an
+ * authemail rejection we fall back to the payer's own deliverable address and
+ * try once more.
+ *
+ * Returns null when there is nothing different worth trying.
+ */
+function authEmailFallback(payerEmail: string | null | undefined, used: string): string | null {
+  const candidates = [payerEmail?.trim(), platform().contact.email];
+  for (const c of candidates) {
+    if (c && c !== used && isDeliverableEmail(c)) return c;
+  }
+  return null;
+}
+
+/** Did Paynow reject us specifically over the authemail field? */
+function isAuthEmailRejection(raw: string | undefined): boolean {
+  return /authemail/i.test(raw ?? "");
+}
+
+/**
  * Turn a Paynow API error into something a student can act on.
  *
  * These strings were being shown to students verbatim. "The authemail field is
@@ -224,7 +249,8 @@ function parsePaynowResponse(text: string): Record<string, string> {
 
 /** Create a Paynow payment (or a mock one in development). */
 export async function createPaynowPayment(
-  input: InitiatePaymentInput,
+  input: InitiatePaymentInput & { authEmailOverride?: string },
+  retried = false,
 ): Promise<InitiatePaymentResult> {
   const config = getPaynowConfig();
 
@@ -250,7 +276,7 @@ export async function createPaynowPayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: resolveAuthEmail(input.email),
+      authemail: input.authEmailOverride ?? resolveAuthEmail(input.email),
       status: "Message",
     };
     values.hash = paynowHash(values, config.integrationKey);
@@ -271,11 +297,24 @@ export async function createPaynowPayment(
         providerRef: parsed.paynowreference,
       };
     }
+    const providerError = parsed.error || parsed.status || "Paynow error";
+
+    // One retry with a different address if that is what it objected to.
+    if (isAuthEmailRejection(providerError) && !retried) {
+      const fallback = authEmailFallback(input.email, values.authemail);
+      if (fallback) {
+        console.warn("[paynow] authemail rejected, retrying with payer address", {
+          rejected: values.authemail,
+        });
+        return createPaynowPayment({ ...input, authEmailOverride: fallback }, true);
+      }
+    }
+
     return {
       ok: false,
       mode: "live",
-      error: friendlyPaynowError(parsed.error || parsed.status),
-      providerError: parsed.error || parsed.status || "Paynow error",
+      error: friendlyPaynowError(providerError),
+      providerError,
     };
   } catch (e) {
     // Network/timeout: the request MAY have reached Paynow. Ambiguous, not failed.
@@ -311,7 +350,8 @@ export interface InitiateMobileResult {
  * status. In development mode this is mocked and auto-approves on poll.
  */
 export async function createPaynowMobilePayment(
-  input: InitiateMobileInput,
+  input: InitiateMobileInput & { authEmailOverride?: string },
+  retried = false,
 ): Promise<InitiateMobileResult> {
   const config = getPaynowConfig();
   const method = input.method ?? "ecocash";
@@ -335,7 +375,7 @@ export async function createPaynowMobilePayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: resolveAuthEmail(input.email),
+      authemail: input.authEmailOverride ?? resolveAuthEmail(input.email),
       phone: toLocalZwPhone(input.phone),
       method,
       status: "Message",
@@ -360,11 +400,26 @@ export async function createPaynowMobilePayment(
           "Check your phone and enter your EcoCash PIN to approve the payment.",
       };
     }
+    const providerError =
+      parsed.error || parsed.status || "Paynow declined the request.";
+
+    // Same one-shot retry as the web flow: a wrong PAYNOW_AUTH_EMAIL must not
+    // stop people paying when the payer's own address would be accepted.
+    if (isAuthEmailRejection(providerError) && !retried) {
+      const fallback = authEmailFallback(input.email, values.authemail);
+      if (fallback) {
+        console.warn("[paynow] authemail rejected, retrying with payer address", {
+          rejected: values.authemail,
+        });
+        return createPaynowMobilePayment({ ...input, authEmailOverride: fallback }, true);
+      }
+    }
+
     return {
       ok: false,
       mode: "live",
-      error: friendlyPaynowError(parsed.error || parsed.status),
-      providerError: parsed.error || parsed.status || "Paynow declined the request.",
+      error: friendlyPaynowError(providerError),
+      providerError,
     };
   } catch (e) {
     // Network/timeout: the prompt MAY have been sent. Ambiguous, not failed.
