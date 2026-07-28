@@ -1,3 +1,4 @@
+import { platform } from "@/core/platform";
 import { renderTemplate } from "@/lib/utils";
 
 interface BrandedOptions {
@@ -282,6 +283,18 @@ export const emailTemplates = {
       </div>`,
       ctaLabel: "Sign in & complete onboarding",
       ctaUrl: String(d.loginUrl || "#"),
+    }),
+
+  // Password recovery. Uses the platform name from config so the same template
+  // is correct under either brand.
+  passwordReset: (d: TemplateData) =>
+    brandedEmail({
+      heading: "Reset your password",
+      intro: `Hi ${String(d.studentName || "there").split(" ")[0]}, we received a request to reset the password on your ${platform().name} account.`,
+      bodyHtml: `Click the button below to choose a new password. The link is valid for <strong>one hour</strong> and can only be used once.
+      <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#a3a39d;">If you didn't ask for this, you can ignore this email — your password will not change, and nobody has been given access to your account.</p>`,
+      ctaLabel: "Choose a new password",
+      ctaUrl: String(d.resetUrl || "#"),
     }),
 
   // Sent to a newly-created owner/admin account with temporary credentials.

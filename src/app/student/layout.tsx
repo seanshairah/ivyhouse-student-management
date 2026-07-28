@@ -34,7 +34,13 @@ export default async function StudentLayout({
   const session = await requireRole("STUDENT");
   const profile = await prisma.studentProfile.findUnique({
     where: { userId: session.userId },
-    select: { fullName: true, email: true, status: true, roomId: true },
+    select: {
+      fullName: true,
+      email: true,
+      status: true,
+      roomId: true,
+      onboardingCompletedAt: true,
+    },
   });
 
   const user = {
@@ -46,7 +52,12 @@ export default async function StudentLayout({
 
   // Onboarding gate: a student with no room yet (e.g. a bulk-imported student)
   // must choose a room and add next-of-kin details before the dashboard opens.
-  const needsOnboarding = Boolean(profile) && !profile?.roomId;
+  // Gate on the one-time onboarding stamp, not on whether a room happens to be
+  // assigned right now. Gating on roomId meant that clearing a student's room
+  // — a room move, a reallocation — silently threw an established resident back
+  // into the onboarding wizard.
+  const needsOnboarding =
+    Boolean(profile) && !profile?.onboardingCompletedAt && !profile?.roomId;
   const onOnboardingRoute = pathname.startsWith("/student/onboarding");
   if (needsOnboarding && pathname && !onOnboardingRoute) {
     redirect("/student/onboarding");

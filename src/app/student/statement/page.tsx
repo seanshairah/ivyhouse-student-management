@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/misc";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { INVOICE_STATUS_META, PAYMENT_STATUS_META } from "@/constants";
+import { PAYMENT_STATUS_META } from "@/constants";
 
 export default async function StudentStatementPage() {
   const session = await requireRole("STUDENT");
@@ -40,13 +40,13 @@ export default async function StudentStatementPage() {
         <EmptyState
           icon={<FileText className="size-5" />}
           title="No statement available"
-          description="Your statement will appear once you have invoices or payments on your account."
+          description="Your statement will appear once you have charges or payments on your account."
         />
       </div>
     );
   }
 
-  const { student, invoices, payments, totals } = statement;
+  const { student, charges, payments, totals } = statement;
 
   return (
     <div className="space-y-6">
@@ -99,43 +99,50 @@ export default async function StudentStatementPage() {
         />
       </div>
 
-      {/* Invoices */}
+      {/* Charges — what the student has been billed, by category */}
       <Card>
         <CardHeader>
-          <CardTitle>Invoices</CardTitle>
+          <CardTitle>Charges</CardTitle>
         </CardHeader>
         <CardContent>
-          {invoices.length ? (
+          {charges.length ? (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Number</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead>Issued</TableHead>
+                  <TableHead>Due</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Paid</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>Outstanding</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {invoices.map((inv) => (
-                  <TableRow key={inv.number}>
-                    <TableCell className="font-medium">{inv.number}</TableCell>
+                {charges.map((c, i) => (
+                  <TableRow key={`${c.description}-${i}`}>
+                    <TableCell className="font-medium">{c.categoryLabel}</TableCell>
                     <TableCell className="max-w-[200px] truncate">
-                      {inv.description}
+                      {c.description}
                     </TableCell>
-                    <TableCell>{formatDate(inv.issuedAt)}</TableCell>
-                    <TableCell>{formatCurrency(inv.amount)}</TableCell>
-                    <TableCell>{formatCurrency(inv.amountPaid)}</TableCell>
                     <TableCell>
-                      <StatusBadge meta={INVOICE_STATUS_META[inv.status]} />
+                      {c.dueDate ? formatDate(c.dueDate) : "—"}
+                      {c.overdue ? (
+                        <span className="ml-1 font-medium text-rose-600">overdue</span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{formatCurrency(c.amount)}</TableCell>
+                    <TableCell>{formatCurrency(c.paid)}</TableCell>
+                    <TableCell
+                      className={c.outstanding > 0 ? "font-medium text-rose-600" : ""}
+                    >
+                      {formatCurrency(c.outstanding)}
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           ) : (
-            <p className="text-sm text-muted-foreground">No invoices.</p>
+            <p className="text-sm text-muted-foreground">No charges yet.</p>
           )}
         </CardContent>
       </Card>

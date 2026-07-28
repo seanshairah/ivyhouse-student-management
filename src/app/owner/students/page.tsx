@@ -10,16 +10,37 @@ export default async function OwnerStudentsPage() {
   const [students, houses] = await Promise.all([
     prisma.studentProfile.findMany({
       orderBy: { createdAt: "desc" },
-      include: { house: true, room: true, invoices: true },
+      include: {
+        house: true,
+        room: true,
+        charges: {
+          where: { status: "OUTSTANDING" },
+          select: {
+            amount: true,
+            dueDate: true,
+            allocations: { select: { amount: true } },
+          },
+        },
+      },
     }),
     prisma.house.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
   ]);
 
+  // Balances come from the charge ledger. This used to sum Invoice.amount and
+  // Invoice.amountPaid, which meant every deposit and every self-service rent
+  // or transport payment — the majority of real money — was invisible, and the
+  // column read zero for most students.
   const rows: StudentRow[] = students.map((s) => {
-    const due = s.invoices
-      .filter((i) => i.status !== "CANCELLED")
-      .reduce((sum, i) => sum + toNumber(i.amount), 0);
-    const paid = s.invoices.reduce((sum, i) => sum + toNumber(i.amountPaid), 0);
+    let outstanding = 0;
+    let arrears = 0;
+    const now = new Date();
+    for (const c of s.charges) {
+      const allocated = c.allocations.reduce((sum, a) => sum + toNumber(a.amount), 0);
+      const remaining = Math.max(0, toNumber(c.amount) - allocated);
+      if (remaining <= 0) continue;
+      outstanding += remaining;
+      if (c.dueDate && c.dueDate < now) arrears += remaining;
+    }
     return {
       id: s.id,
       fullName: s.fullName,
@@ -29,7 +50,8 @@ export default async function OwnerStudentsPage() {
       houseName: s.house?.name ?? "—",
       roomNumber: s.room?.number ?? null,
       status: s.status,
-      balance: due - paid,
+      balance: outstanding,
+      arrears,
     };
   });
 

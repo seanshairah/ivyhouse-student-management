@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, FileText, Receipt } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
+import { getStudentAccount } from "@/core/billing/ledger";
 import { toNumber, formatCurrency, formatDate } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -61,11 +62,13 @@ export default async function StudentDetailPage({
     orderBy: [{ houseId: "asc" }, { number: "asc" }],
   });
 
-  const due = student.invoices
-    .filter((i) => i.status !== "CANCELLED")
-    .reduce((s, i) => s + toNumber(i.amount), 0);
-  const paid = student.invoices.reduce((s, i) => s + toNumber(i.amountPaid), 0);
-  const balance = due - paid;
+  // The same authoritative numbers the student sees on their own dashboard.
+  // This page used to compute its own totals from Invoice rows, so an owner and
+  // a student could look at the same account and read different balances.
+  const account = await getStudentAccount(student.id);
+  const due = account.totalCharged;
+  const paid = account.totalPaid;
+  const balance = account.totalOutstanding;
 
   return (
     <div className="space-y-6">

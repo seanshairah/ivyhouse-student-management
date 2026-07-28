@@ -1,8 +1,8 @@
 import { randomInt } from "crypto";
-import { PaymentMethod, PaymentStatus, StudentStatus, UserRole } from "@prisma/client";
+import { StudentStatus, UserRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/lib/auth";
-import { generateReference } from "@/lib/utils";
+import { recordManualPayment } from "@/core/billing/deposits";
 import { sendTemplatedEmail } from "@/services/email";
 import { sendStatusSMS } from "@/services/sms";
 import { EMAIL_SUBJECTS } from "@/constants/messages";
@@ -84,21 +84,14 @@ export async function createStudentAccount(
   });
 
   if (input.deposit && input.deposit > 0) {
-    const already = await prisma.payment.count({
-      where: { studentProfileId: profile.id, reference: { startsWith: "DEP-" } },
+    // Shared with the other platform. Raises a DEPOSIT charge, settles it,
+    // and issues a receipt — previously this wrote a bare Payment row, so the
+    // student had no receipt and the owner's deposit total read zero.
+    await recordManualPayment({
+      studentProfileId: profile.id,
+      amount: input.deposit,
+      onlyIfNone: true,
     });
-    if (already === 0) {
-      await prisma.payment.create({
-        data: {
-          reference: generateReference("DEP"),
-          studentProfileId: profile.id,
-          amount: input.deposit,
-          method: PaymentMethod.CASH,
-          status: PaymentStatus.PAID,
-          paidAt: new Date(),
-        },
-      });
-    }
   }
 
   await audit({

@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { platform } from "@/core/platform";
 
 /**
  * Paynow integration abstraction.
@@ -21,6 +22,78 @@ export function toLocalZwPhone(phone: string): string {
   return p;
 }
 
+/**
+ * Reserved and non-routable TLDs. Paynow validates the address it is given and
+ * rejects these outright, which surfaces as "The authemail field is required
+ * for remote transactions" — an error that reads as if we sent nothing.
+ */
+const UNDELIVERABLE_TLDS = ["test", "local", "localhost", "invalid", "example"];
+
+function isDeliverableEmail(value: string | undefined | null): boolean {
+  const email = (value ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
+  const tld = email.split(".").pop() ?? "";
+  return !UNDELIVERABLE_TLDS.includes(tld);
+}
+
+/**
+ * The address Paynow is told to send its confirmation to.
+ *
+ * Paynow requires this on every remote (mobile-money) transaction and refuses
+ * anything it considers undeliverable. Two rules apply:
+ *
+ *  1. While the merchant account is in TEST mode, Paynow only accepts the
+ *     merchant's own registered email. That is what PAYNOW_AUTH_EMAIL is for —
+ *     set it to the merchant address and every test transaction uses it.
+ *  2. Otherwise use the payer's own address, so the confirmation reaches them —
+ *     but only if it is actually deliverable. A seeded or placeholder address
+ *     on a reserved TLD would be rejected and take the whole payment with it,
+ *     so fall back to the platform's contact address rather than fail.
+ */
+export function resolveAuthEmail(payerEmail?: string | null): string {
+  const configured = process.env.PAYNOW_AUTH_EMAIL?.trim();
+  if (configured) return configured;
+  if (isDeliverableEmail(payerEmail)) return payerEmail!.trim();
+  return platform().contact.email;
+}
+
+/**
+ * Turn a Paynow API error into something a student can act on.
+ *
+ * These strings were being shown to students verbatim. "The authemail field is
+ * required for remote transactions" tells a payer nothing, and worse, implies
+ * they did something wrong when the cause is our configuration or the
+ * merchant's account status.
+ */
+export function friendlyPaynowError(raw: string | undefined): string {
+  const s = (raw ?? "").toLowerCase();
+
+  if (s.includes("authemail")) {
+    return (
+      "Payments aren't set up correctly yet — the account this platform uses " +
+      "to take payments is missing its contact address. Please tell the office; " +
+      "no money has left your account."
+    );
+  }
+  if (s.includes("testing") || s.includes("cannot accept payments")) {
+    return (
+      "Online payments are not live yet — the payment provider still has this " +
+      "account in testing. Please pay at the office for now; no money has left " +
+      "your account."
+    );
+  }
+  if (s.includes("invalid") && s.includes("phone")) {
+    return "That mobile number wasn't accepted. Check it and try again.";
+  }
+  if (s.includes("insufficient")) {
+    return "There wasn't enough balance in the wallet to complete this payment.";
+  }
+  if (!raw) return "We couldn't start the payment. Please try again in a moment.";
+
+  // Unrecognised: still don't leak raw API text to a student.
+  return "We couldn't start the payment just now. Please try again, or contact the office if it keeps happening.";
+}
+
 export interface PaynowConfig {
   integrationId: string;
   integrationKey: string;
@@ -30,17 +103,31 @@ export interface PaynowConfig {
 }
 
 export function getPaynowConfig(): PaynowConfig {
+  const integrationId = process.env.PAYNOW_INTEGRATION_ID || "";
+  const integrationKey = process.env.PAYNOW_INTEGRATION_KEY || "";
+  const hasCredentials = Boolean(integrationId && integrationKey);
+
+  // Fail closed in production.
+  //
+  // This used to silently fall back to "development" whenever the Paynow
+  // credentials were missing — and in development mode verifyPaynowPayment()
+  // reports every payment as Paid without contacting anyone. A production
+  // deploy that lost its Paynow env vars would therefore have marked every
+  // student's rent as settled for free, and looked healthy doing it.
+  if (process.env.NODE_ENV === "production" && !hasCredentials) {
+    throw new Error(
+      "PAYNOW_INTEGRATION_ID / PAYNOW_INTEGRATION_KEY are not set. Refusing to " +
+        "run in mock payment mode in production — mock mode settles every " +
+        "payment as paid without taking money.",
+    );
+  }
+
   return {
-    integrationId: process.env.PAYNOW_INTEGRATION_ID || "",
-    integrationKey: process.env.PAYNOW_INTEGRATION_KEY || "",
+    integrationId,
+    integrationKey,
     returnUrl: process.env.PAYNOW_RETURN_URL || "http://localhost:3000/student/payments/return",
     resultUrl: process.env.PAYNOW_RESULT_URL || "http://localhost:3000/api/payments/paynow/result",
-    mode:
-      process.env.PAYNOW_MODE === "live" &&
-      process.env.PAYNOW_INTEGRATION_ID &&
-      process.env.PAYNOW_INTEGRATION_KEY
-        ? "live"
-        : "development",
+    mode: process.env.PAYNOW_MODE === "live" && hasCredentials ? "live" : "development",
   };
 }
 
@@ -56,7 +143,10 @@ export interface InitiatePaymentResult {
   redirectUrl?: string;
   pollUrl?: string;
   providerRef?: string;
+  /** Student-facing message. Safe to display. */
   error?: string;
+  /** Paynow's own wording, for logs and the audit trail — never shown to a student. */
+  providerError?: string;
   /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
   ambiguous?: boolean;
   mode: "development" | "live";
@@ -66,6 +156,42 @@ export interface InitiatePaymentResult {
 function paynowHash(values: Record<string, string>, key: string): string {
   const concat = Object.values(values).join("") + key;
   return crypto.createHash("sha512").update(concat).digest("hex").toUpperCase();
+}
+
+/**
+ * Verify the hash Paynow puts on data it sends US.
+ *
+ * We were signing our outbound requests but never checking the signature on
+ * anything coming back, so a poll response was trusted purely because it
+ * arrived over TLS. Paynow builds the hash from every field except `hash`
+ * itself, concatenated in order, with the integration key appended.
+ *
+ * Returns:
+ *   "valid"    — hash present and correct
+ *   "invalid"  — hash present and wrong: treat the payload as hostile
+ *   "absent"   — no hash field; caller decides (we log and fall back to TLS)
+ *
+ * Compared in constant time so this can't be used as a timing oracle.
+ */
+export function verifyPaynowHash(
+  payload: Record<string, string>,
+  key: string,
+): "valid" | "invalid" | "absent" {
+  const provided = payload.hash;
+  if (!provided) return "absent";
+  if (!key) return "absent";
+
+  const signed: Record<string, string> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k.toLowerCase() === "hash") continue;
+    signed[k] = v;
+  }
+
+  const expected = paynowHash(signed, key);
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided.toUpperCase(), "utf8");
+  if (a.length !== b.length) return "invalid";
+  return crypto.timingSafeEqual(a, b) ? "valid" : "invalid";
 }
 
 function toUrlEncoded(data: Record<string, string>): string {
@@ -124,7 +250,7 @@ export async function createPaynowPayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
+      authemail: resolveAuthEmail(input.email),
       status: "Message",
     };
     values.hash = paynowHash(values, config.integrationKey);
@@ -148,7 +274,8 @@ export async function createPaynowPayment(
     return {
       ok: false,
       mode: "live",
-      error: parsed.error || parsed.status || "Paynow error",
+      error: friendlyPaynowError(parsed.error || parsed.status),
+      providerError: parsed.error || parsed.status || "Paynow error",
     };
   } catch (e) {
     // Network/timeout: the request MAY have reached Paynow. Ambiguous, not failed.
@@ -156,9 +283,12 @@ export async function createPaynowPayment(
   }
 }
 
+/** Mobile-money rails Paynow can push a USSD prompt to. */
+export type MobileMethod = "ecocash" | "onemoney" | "innbucks";
+
 export interface InitiateMobileInput extends InitiatePaymentInput {
   phone: string;
-  method?: "ecocash" | "onemoney" | "innbucks";
+  method?: MobileMethod;
 }
 
 export interface InitiateMobileResult {
@@ -166,7 +296,10 @@ export interface InitiateMobileResult {
   pollUrl?: string;
   providerRef?: string;
   instructions?: string;
+  /** Student-facing message. Safe to display. */
   error?: string;
+  /** Paynow's own wording, for logs and the audit trail — never shown to a student. */
+  providerError?: string;
   /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
   ambiguous?: boolean;
   mode: "development" | "live";
@@ -202,7 +335,7 @@ export async function createPaynowMobilePayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
+      authemail: resolveAuthEmail(input.email),
       phone: toLocalZwPhone(input.phone),
       method,
       status: "Message",
@@ -230,7 +363,8 @@ export async function createPaynowMobilePayment(
     return {
       ok: false,
       mode: "live",
-      error: parsed.error || parsed.status || "Paynow declined the request.",
+      error: friendlyPaynowError(parsed.error || parsed.status),
+      providerError: parsed.error || parsed.status || "Paynow declined the request.",
     };
   } catch (e) {
     // Network/timeout: the prompt MAY have been sent. Ambiguous, not failed.
@@ -289,6 +423,30 @@ export async function verifyPaynowPayment(
     const res = await fetch(pollUrl);
     const parsed = parsePaynowResponse(await res.text());
     const status = parsed.status || "Unknown";
+
+    // The poll response is what promotes a payment to PAID, so its signature is
+    // the one that matters most. A wrong hash means the body did not come from
+    // Paynow — refuse to act on it rather than settling on a forged "Paid".
+    const signature = verifyPaynowHash(parsed, config.integrationKey);
+    if (signature === "invalid") {
+      console.error("[paynow] poll response failed hash verification", {
+        pollUrl,
+        status,
+      });
+      return {
+        paid: false,
+        status: "Signature verification failed",
+        outcome: "pending",
+        raw: parsed,
+      };
+    }
+    if (signature === "absent") {
+      // Paynow normally signs poll responses. Missing means an unexpected
+      // payload shape, so note it — but TLS still authenticated the origin, and
+      // failing hard here would strand real payments.
+      console.warn("[paynow] poll response carried no hash", { pollUrl, status });
+    }
+
     const outcome = classifyPaynowStatus(status);
     return { paid: outcome === "paid", status, outcome, raw: parsed };
   } catch (e) {

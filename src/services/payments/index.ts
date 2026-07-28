@@ -5,6 +5,8 @@ import {
   ApplicationStatus,
   ApplicationType,
   RoomStatus,
+  ChargeStatus,
+  ChargeCategory,
   type Prisma,
 } from "@prisma/client";
 import { generateReference, formatCurrency, formatDate, toNumber } from "@/lib/utils";
@@ -13,14 +15,20 @@ import {
   createPaynowMobilePayment,
   verifyPaynowPayment,
   getPaynowConfig,
+  type MobileMethod,
 } from "./paynow";
 import {
-  SEMESTER_MONTHS,
-  TRANSPORT_FEE,
-  DEFAULT_MONTHLY_RENT,
   monthlyRentFor,
+  priceFor,
+  periodFrom,
+  dueDateFromNow,
   type PaymentPurpose,
-} from "@/constants";
+} from "@/core/billing/pricing";
+import {
+  raiseCharge,
+  allocatePayment,
+  deallocatePayment,
+} from "@/core/billing/ledger";
 import { updateInvoiceAfterPayment } from "@/services/invoices";
 import { createReceipt } from "@/services/receipts";
 import { sendTemplatedEmail } from "@/services/email";
@@ -42,9 +50,12 @@ export async function generatePaymentLink(
   const notify = opts?.notify !== false;
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { studentProfile: true },
+    include: { studentProfile: true, charges: { select: { category: true } } },
   });
   if (!invoice) throw new Error("Invoice not found");
+  // Carry the invoice's category onto the payment so revenue reporting can
+  // split rent from transport before the allocations exist.
+  const category = invoice.charges[0]?.category ?? ChargeCategory.OTHER;
 
   const outstanding = toNumber(invoice.amount) - toNumber(invoice.amountPaid);
   const reference = generateReference("PAY");
@@ -62,6 +73,7 @@ export async function generatePaymentLink(
       studentProfileId: invoice.studentProfileId,
       invoiceId: invoice.id,
       amount: outstanding,
+      category,
       status: PaymentStatus.PENDING,
       paymentLink: paynow.redirectUrl,
       transaction: {
@@ -107,25 +119,6 @@ export async function generatePaymentLink(
   return { payment, redirectUrl: paynow.redirectUrl };
 }
 
-/** Resolve a self-service payment purpose into an amount + description. */
-export function resolvePurpose(
-  purpose: PaymentPurpose,
-  monthlyRent: number,
-): { amount: number; description: string } {
-  const rent = monthlyRent > 0 ? monthlyRent : DEFAULT_MONTHLY_RENT;
-  switch (purpose) {
-    case "RENT_MONTH":
-      return { amount: rent, description: "Accommodation — next month rent" };
-    case "RENT_SEMESTER":
-      return {
-        amount: rent * SEMESTER_MONTHS,
-        description: `Accommodation — next semester rent (${SEMESTER_MONTHS} months)`,
-      };
-    case "TRANSPORT":
-      return { amount: TRANSPORT_FEE, description: "Transport / shuttle service — 1 month" };
-  }
-}
-
 export interface SelfPaymentResult {
   ok: boolean;
   reference?: string;
@@ -144,7 +137,7 @@ export interface SelfPaymentResult {
 export async function createSelfPayment(opts: {
   profileId: string;
   purpose: PaymentPurpose;
-  method: "ecocash" | "web";
+  method: MobileMethod | "web";
   phone?: string;
 }): Promise<SelfPaymentResult> {
   const profile = await prisma.studentProfile.findUnique({
@@ -153,11 +146,28 @@ export async function createSelfPayment(opts: {
   });
   if (!profile) return { ok: false, error: "Student profile not found" };
 
+  // Rent needs a room. Without one, monthlyRentFor() falls back to the
+  // platform default and we would invent a rent debt for accommodation the
+  // student has not actually been given — a real risk, since a large share of
+  // students on both platforms are onboarded but not yet allocated a room.
+  // Transport is independent of a room, so that stays available.
+  const isRent = opts.purpose === "RENT_MONTH" || opts.purpose === "RENT_SEMESTER";
+  if (isRent && !profile.room) {
+    return {
+      ok: false,
+      error:
+        "You don't have a room assigned yet, so there's no rent to pay. " +
+        "Please contact the office — they'll allocate your room first.",
+    };
+  }
+
+  // The amount is computed here, on the server, from the student's own room and
+  // the platform's configured rates. The browser only ever sends a purpose.
   const monthly = monthlyRentFor(
     profile.room?.type,
     profile.room ? toNumber(profile.room.price) : null,
   );
-  const { amount, description } = resolvePurpose(opts.purpose, monthly);
+  const { amount, description, category, months } = priceFor(opts.purpose, monthly);
 
   // Duplicate-charge guard: if an identical payment is already in flight (same
   // student + amount, created seconds ago), reuse it instead of creating a
@@ -186,10 +196,29 @@ export async function createSelfPayment(opts: {
 
   const reference = generateReference("PAY");
 
-  if (opts.method === "ecocash") {
+  // Raise the charge BEFORE taking the money.
+  //
+  // Previously a self-service payment created a Payment row with no charge and
+  // no invoice behind it, so the student's balance never moved when they paid
+  // and the owner's reports could not see what the money was for. The charge is
+  // the thing the ledger derives balances from, so it has to exist first.
+  const period = periodFrom(new Date(), months);
+  const charge = await raiseCharge({
+    studentProfileId: profile.id,
+    category,
+    description,
+    amount,
+    dueDate: dueDateFromNow(),
+    periodStart: period.start,
+    periodEnd: period.end,
+  });
+
+  if (opts.method !== "web") {
     const phone = (opts.phone || "").trim();
     if (phone.replace(/[^\d]/g, "").length < 9) {
-      return { ok: false, error: "Enter a valid EcoCash number." };
+      // Nothing was sent to Paynow, so withdraw the charge we just raised.
+      await cancelUnpaidCharge(charge.id);
+      return { ok: false, error: "Enter a valid mobile money number." };
     }
     const r = await createPaynowMobilePayment({
       reference,
@@ -197,13 +226,14 @@ export async function createSelfPayment(opts: {
       email: profile.email,
       description,
       phone,
-      method: "ecocash",
+      method: opts.method,
     });
     await prisma.payment.create({
       data: {
         reference,
         studentProfileId: profile.id,
         amount,
+        category,
         method: "PAYNOW",
         // Ambiguous (network/timeout) stays PENDING so polling/webhook can
         // still resolve it — never auto-fail an uncertain charge.
@@ -213,12 +243,20 @@ export async function createSelfPayment(opts: {
             provider: "paynow",
             pollUrl: r.pollUrl,
             providerRef: r.providerRef,
-            rawStatus: r.ok ? "ecocash-prompt-sent" : r.ambiguous ? "uncertain" : r.error,
+            rawStatus: r.ok
+              ? `${opts.method}-prompt-sent`
+              : r.ambiguous
+                ? "uncertain"
+                : (r.providerError ?? r.error),
           },
         },
       },
     });
     if (!r.ok) {
+      // A hard decline means no money will arrive, so withdraw the charge we
+      // raised rather than leaving the student owing a debt they never agreed
+      // to. An ambiguous result keeps the charge: the payment may still land.
+      if (!r.ambiguous) await cancelUnpaidCharge(charge.id);
       return {
         ok: false,
         reference,
@@ -242,6 +280,7 @@ export async function createSelfPayment(opts: {
       reference,
       studentProfileId: profile.id,
       amount,
+      category,
       method: "PAYNOW",
       status: PaymentStatus.PENDING,
       paymentLink: r.redirectUrl,
@@ -255,8 +294,32 @@ export async function createSelfPayment(opts: {
       },
     },
   });
-  if (!r.ok) return { ok: false, reference, error: r.error };
+  if (!r.ok) {
+    if (!r.ambiguous) await cancelUnpaidCharge(charge.id);
+    return { ok: false, reference, error: r.error };
+  }
   return { ok: true, reference, amount, redirectUrl: r.redirectUrl };
+}
+
+/**
+ * Withdraw a charge that was raised for a payment attempt which then failed
+ * outright. Only ever touches a charge nothing has been allocated against, so
+ * it can never erase a debt the student has partly paid.
+ */
+async function cancelUnpaidCharge(chargeId: string): Promise<void> {
+  await prisma.charge
+    .updateMany({
+      where: {
+        id: chargeId,
+        status: ChargeStatus.OUTSTANDING,
+        allocations: { none: {} },
+      },
+      data: {
+        status: ChargeStatus.CANCELLED,
+        adjustmentNote: "Withdrawn automatically — payment initiation failed.",
+      },
+    })
+    .catch(() => undefined);
 }
 
 /**
@@ -401,9 +464,52 @@ const PAYMENT_STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * Set a payment's status without settling it. Used for non-paid terminal /
- * in-flight states (cancelled, refunded, processing). Never promotes a payment
- * to PAID — only settlePayment does that, and only after Paynow confirms.
+ * ── Payment state machine ────────────────────────────────────────────────
+ *
+ * Every transition a payment is allowed to make, and nothing else. Anything
+ * absent from this table is rejected, which is what stops a late or forged
+ * out-of-order provider callback from rewriting settled history.
+ *
+ *   PENDING    → PROCESSING, PAID, FAILED, CANCELLED
+ *   PROCESSING → PAID, FAILED, CANCELLED
+ *   PAID       → REFUNDED            (the only way out of PAID)
+ *   FAILED     → PENDING             (provider retry of the same reference)
+ *   CANCELLED  → (terminal)
+ *   REFUNDED   → (terminal)
+ *
+ * PAID is promoted only by settlePayment(), and only after Paynow itself has
+ * confirmed. No other function may set it.
+ */
+const ALLOWED_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
+  [PaymentStatus.PENDING]: [
+    PaymentStatus.PROCESSING,
+    PaymentStatus.PAID,
+    PaymentStatus.FAILED,
+    PaymentStatus.CANCELLED,
+  ],
+  [PaymentStatus.PROCESSING]: [
+    PaymentStatus.PAID,
+    PaymentStatus.FAILED,
+    PaymentStatus.CANCELLED,
+  ],
+  [PaymentStatus.PAID]: [PaymentStatus.REFUNDED],
+  [PaymentStatus.FAILED]: [PaymentStatus.PENDING],
+  [PaymentStatus.CANCELLED]: [],
+  [PaymentStatus.REFUNDED]: [],
+};
+
+export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
+  if (from === to) return true;
+  return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+/**
+ * Move a payment to a non-paid status, honouring the state machine above.
+ * Never promotes a payment to PAID — only settlePayment does that.
+ *
+ * A refund is the one legal exit from PAID: when it happens the money must also
+ * come back off the ledger, so the charges it had settled go back to
+ * outstanding and the student is billed for them again.
  */
 async function setPaymentStatus(
   reference: string,
@@ -415,16 +521,32 @@ async function setPaymentStatus(
     include: { transaction: true },
   });
   if (!payment) return null;
-  // Never downgrade an already-settled payment via a poll.
-  if (payment.status === PaymentStatus.PAID) return payment;
-  return prisma.payment.update({
-    where: { id: payment.id },
-    data: {
-      status,
-      ...(payment.transaction && rawStatus
-        ? { transaction: { update: { rawStatus } } }
-        : {}),
-    },
+
+  if (!canTransition(payment.status, status)) {
+    // Not an error — this is the guard doing its job against a late or
+    // duplicated provider callback. Record it and leave the payment alone.
+    console.warn("[payments] rejected illegal transition", {
+      reference,
+      from: payment.status,
+      to: status,
+    });
+    return payment;
+  }
+  if (payment.status === status) return payment;
+
+  return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    if (status === PaymentStatus.REFUNDED) {
+      await deallocatePayment(payment.id, tx);
+    }
+    return tx.payment.update({
+      where: { id: payment.id },
+      data: {
+        status,
+        ...(payment.transaction && rawStatus
+          ? { transaction: { update: { rawStatus } } }
+          : {}),
+      },
+    });
   });
 }
 
@@ -454,6 +576,13 @@ export async function settlePayment(reference: string) {
       data: { status: PaymentStatus.PAID, paidAt: new Date() },
     });
     const r = await createReceipt(payment.id, toNumber(payment.amount), tx);
+
+    // Apply the money to the student's outstanding charges, inside the same
+    // transaction that marked it paid — the balance can never be observed in a
+    // state where the payment is settled but the debt is still standing.
+    // Idempotent, so a replayed webhook re-derives the same allocations.
+    await allocatePayment(payment.id, tx);
+
     if (payment.invoiceId) {
       await updateInvoiceAfterPayment(payment.invoiceId, tx);
       // Advance any linked application to PAID.

@@ -86,6 +86,29 @@ enum InvoiceStatus {
   CANCELLED
 }
 
+/// What a charge is for. This is the authoritative rent/transport split — it
+/// replaces the old habit of inferring the category from a free-text
+/// description or a reference prefix.
+enum ChargeCategory {
+  RENT
+  TRANSPORT
+  DEPOSIT
+  PENALTY
+  ADJUSTMENT
+  OTHER
+}
+
+enum ChargeStatus {
+  /// Owing. Counts toward the student's balance.
+  OUTSTANDING
+  /// Fully covered by payment allocations.
+  SETTLED
+  /// Written off by an administrator. Does not count toward the balance.
+  WAIVED
+  /// Raised in error. Does not count toward the balance.
+  CANCELLED
+}
+
 enum NotificationChannel {
   EMAIL
   SMS
@@ -153,6 +176,7 @@ model User {
   auditLogs      AuditLog[]
   sentMessages   MessageLog[]    @relation("MessageSender")
   notifications  Notification[]
+  passwordResets PasswordResetToken[]
 }
 
 model House {
@@ -241,8 +265,12 @@ model StudentProfile {
   // targets students who haven't been notified yet.
   credentialsSentAt DateTime?
 
+  // Set when the student completes the guided onboarding form (personal details
+  // + next of kin). Until then they are routed to the onboarding flow.
+  onboardingCompletedAt DateTime?
+
   // Whether the student subscribes to the monthly campus transport service.
-  usesTransport   Boolean       @default(false)
+  transportOptIn  Boolean       @default(false)
 
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -250,8 +278,12 @@ model StudentProfile {
   applications Application[]
   invoices     Invoice[]
   payments     Payment[]
+  charges      Charge[]
   statements   Statement[]
   serviceRequests ServiceRequest[]
+
+  @@index([status])
+  @@index([houseId, status])
 }
 
 model Application {
@@ -318,6 +350,70 @@ model Invoice {
   updatedAt        DateTime       @updatedAt
 
   payments Payment[]
+  charges  Charge[]
+
+  @@index([studentProfileId, status])
+  @@index([status, dueDate])
+}
+
+/// A single thing a student owes, in one category.
+///
+/// This is the ONLY source of truth for what is owed. Balances are always
+/// derived as (sum of OUTSTANDING charges) - (sum of allocations against them);
+/// no running total is stored on the student, so the two can never disagree.
+model Charge {
+  id               String         @id @default(cuid())
+  studentProfileId String
+  studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+
+  category    ChargeCategory
+  description String
+  amount      Decimal        @db.Decimal(10, 2)
+  status      ChargeStatus   @default(OUTSTANDING)
+
+  /// Billing period this charge covers (e.g. one month's rent). Null for
+  /// one-off charges such as a deposit.
+  periodStart DateTime?
+  periodEnd   DateTime?
+  dueDate     DateTime?
+
+  /// Optional grouping onto an invoice document. A charge is valid without one.
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+
+  /// Set when an administrator waives/cancels, for the audit trail.
+  adjustedById String?
+  adjustmentNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations PaymentAllocation[]
+
+  @@index([studentProfileId, status])
+  @@index([studentProfileId, category, status])
+  @@index([status, dueDate])
+}
+
+/// How much of a given payment was applied to a given charge.
+///
+/// Splitting payments from charges is what lets one payment settle several
+/// charges (a combined rent + transport payment) and lets one charge be
+/// settled by several payments (a partial payment).
+model PaymentAllocation {
+  id        String  @id @default(cuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  chargeId  String
+  charge    Charge  @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  amount    Decimal @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  /// One allocation row per (payment, charge) pair — makes settlement
+  /// idempotent: a replayed webhook re-writes the same row instead of
+  /// allocating the money twice.
+  @@unique([paymentId, chargeId])
+  @@index([chargeId])
 }
 
 model Payment {
@@ -333,11 +429,22 @@ model Payment {
   status           PaymentStatus  @default(PENDING)
   paymentLink      String?
   paidAt           DateTime?
+
+  /// What the student intended to pay for. Set at initiation so a payment can
+  /// be reported on before it settles; the authoritative rent/transport split
+  /// after settlement comes from the allocations below.
+  category ChargeCategory @default(OTHER)
+
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
   transaction PaymentTransaction?
   receipt     Receipt?
+  allocations PaymentAllocation[]
+
+  @@index([studentProfileId, status])
+  @@index([status, paidAt])
+  @@index([invoiceId])
 }
 
 model PaymentTransaction {
@@ -502,8 +609,48 @@ model AuditLog {
   @@index([entityType, entityId])
 }
 
+/// A single-use password reset grant.
+///
+/// Only the SHA-256 of the token is stored, so a database leak does not hand
+/// over working reset links. The raw token exists solely in the emailed URL.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 hex of the token that was emailed.
+  tokenHash String   @unique
+  expiresAt DateTime
+  /// Set the moment it is redeemed, so a link cannot be replayed.
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Sliding-window counter for rate limiting.
+///
+/// Kept in the database rather than in memory because both platforms deploy to
+/// serverless, where each request may land on a fresh instance — an in-process
+/// counter would reset constantly and enforce nothing.
+model RateLimit {
+  id        String   @id @default(cuid())
+  /// Bucket key, e.g. "login:someone@example.com" or "pay:<profileId>".
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
+}
+
 model Settings {
   id                String   @id @default("singleton")
+
+  /// Which platform this database belongs to ("ivy-house" | "blessbri").
+  /// The app asserts this matches its configured platform on first use, so a
+  /// deployment pointed at the wrong DATABASE_URL fails loudly instead of
+  /// quietly serving one business's data under the other's brand.
+  platformKey       String?
+
   businessName      String   @default("Student Housing Co.")
   ownerName         String   @default("House Owner")
   ownerEmail        String   @default("owner@studenthousing.local")

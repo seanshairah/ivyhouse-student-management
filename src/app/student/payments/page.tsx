@@ -85,28 +85,74 @@ export default async function StudentPaymentsPage() {
     <div className="space-y-6">
       <PageHeader title="Payments" description="Your invoices, payments & receipts" />
 
-      {/* Balance summary */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      {/*
+        Account position: rent and transport are shown as their own balances,
+        then combined into what is actually owed. Students asked for both — the
+        split tells them what each service costs, the total tells them what to
+        pay. On a phone these stack in this order, so the total is reachable
+        without scrolling past the detail.
+      */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
-          label="Total billed"
-          value={formatCurrency(balance.totalDue)}
-          icon="FileText"
-          accent="blue"
+          label="Rent balance"
+          value={formatCurrency(balance.rent.outstanding)}
+          icon="Home"
+          accent={balance.rent.outstanding > 0 ? "amber" : "emerald"}
+          hint={
+            balance.rent.arrears > 0
+              ? `${formatCurrency(balance.rent.arrears)} overdue`
+              : "Up to date"
+          }
+        />
+        <StatCard
+          label="Transport balance"
+          value={formatCurrency(balance.transport.outstanding)}
+          icon="Bus"
+          accent={balance.transport.outstanding > 0 ? "amber" : "emerald"}
+          hint={
+            balance.transport.arrears > 0
+              ? `${formatCurrency(balance.transport.arrears)} overdue`
+              : "Up to date"
+          }
+        />
+        <StatCard
+          label="Total due"
+          value={formatCurrency(balance.balance)}
+          icon="Wallet"
+          accent={balance.inArrears ? "rose" : balance.balance > 0 ? "amber" : "emerald"}
+          hint={
+            balance.balance > 0
+              ? balance.nextDueDate
+                ? `Due ${formatDate(balance.nextDueDate)}`
+                : "Outstanding"
+              : "You're all paid up"
+          }
         />
         <StatCard
           label="Total paid"
           value={formatCurrency(balance.totalPaid)}
           icon="CheckCircle2"
           accent="emerald"
-        />
-        <StatCard
-          label="Balance"
-          value={formatCurrency(balance.balance)}
-          icon="Wallet"
-          accent={balance.balance > 0 ? "rose" : "emerald"}
-          hint={balance.balance > 0 ? "Outstanding" : "Settled"}
+          hint={
+            balance.credit > 0 ? `${formatCurrency(balance.credit)} in credit` : "To date"
+          }
         />
       </div>
+
+      {balance.inArrears ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-100"
+        >
+          <p className="font-medium">
+            {formatCurrency(balance.arrears)} is past its due date.
+          </p>
+          <p className="mt-1">
+            Please settle this to keep your accommodation in good standing. You
+            can pay rent and transport separately below.
+          </p>
+        </div>
+      ) : null}
 
       {/* Make a payment */}
       <Card>
@@ -161,7 +207,7 @@ export default async function StudentPaymentsPage() {
               Monthly shuttle to campus.
             </p>
             <EcocashPayDialog
-              purpose="TRANSPORT"
+              purpose="TRANSPORT_MONTH"
               amount={TRANSPORT_FEE}
               title="Transport service"
               triggerLabel="Pay transport"

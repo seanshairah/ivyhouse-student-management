@@ -28,6 +28,7 @@ export const SMS_TEMPLATES = {
 } as const;
 
 export const EMAIL_SUBJECTS = {
+  passwordReset: "Reset your password",
   applicationReceived: "We've received your accommodation application",
   newApplicationAlert: "New accommodation application received",
   applicationApproved: "Your accommodation application is approved 🎉",

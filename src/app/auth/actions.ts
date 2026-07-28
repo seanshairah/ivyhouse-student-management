@@ -12,41 +12,33 @@ import { loginSchema, changePasswordSchema } from "@/lib/validators";
 import { hashPassword } from "@/lib/auth";
 import { getSession } from "@/lib/auth";
 import { audit } from "@/services/audit";
+import {
+  rateLimit,
+  clearRateLimit,
+  pruneRateLimits,
+  LOGIN_LIMIT,
+} from "@/core/auth/rate-limit";
+import {
+  createPasswordReset,
+  redeemPasswordReset,
+  resetUrl,
+  prunePasswordResets,
+} from "@/core/auth/password-reset";
+import { sendTemplatedEmail } from "@/services/email";
+import { EMAIL_SUBJECTS } from "@/constants/messages";
 import type { ActionResult } from "@/types";
 
 const INVALID = "Invalid email or password.";
 
-// Best-effort, in-memory brute-force throttle. Keyed by email; resets on a
-// successful login. In a multi-instance serverless deployment this only spans
-// a single warm instance, so it's a speed bump (paired with the failure delay
-// + a generic error message), not a hard lockout.
-const MAX_ATTEMPTS = 5;
-const WINDOW_MS = 15 * 60 * 1000;
-const attempts = new Map<string, { count: number; firstAt: number }>();
+// A real bcrypt hash of a value nobody knows. Compared against when the email
+// isn't registered, so an unknown account costs the same time as a wrong
+// password and the two are indistinguishable from outside.
+const DUMMY_HASH =
+  "$2a$10$vIHaYaTrXi55tsQpGNrpZOcUnBw99D7mzAr7guofXHYPX13mMOIZi";
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function recordFailure(email: string) {
-  const now = Date.now();
-  const e = attempts.get(email);
-  if (!e || now - e.firstAt > WINDOW_MS) {
-    attempts.set(email, { count: 1, firstAt: now });
-  } else {
-    e.count += 1;
-  }
-}
-
-function isLocked(email: string): boolean {
-  const e = attempts.get(email);
-  if (!e) return false;
-  if (Date.now() - e.firstAt > WINDOW_MS) {
-    attempts.delete(email);
-    return false;
-  }
-  return e.count >= MAX_ATTEMPTS;
-}
+// Brute-force throttling lives in the database (see core/auth/rate-limit).
+// It used to be an in-memory Map, which on serverless spans one warm instance
+// at best — an attacker spreading guesses across cold starts never hit it.
 
 export async function loginAction(
   _prev: ActionResult | null,
@@ -61,32 +53,40 @@ export async function loginAction(
   }
 
   const email = parsed.data.email.toLowerCase().trim();
+  const limitKey = `login:${email}`;
 
-  if (isLocked(email)) {
+  await pruneRateLimits();
+  const gate = await rateLimit({ key: limitKey, ...LOGIN_LIMIT });
+  if (!gate.allowed) {
+    await audit({ actorEmail: email, action: "auth.login.rate_limited" });
+    const minutes = Math.ceil(gate.retryAfterSeconds / 60);
     return {
       success: false,
-      error: "Too many failed attempts. Please wait a few minutes and try again.",
+      error: `Too many sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
     };
   }
 
   const fail = async (reason: string): Promise<ActionResult> => {
-    recordFailure(email);
     await audit({ actorEmail: email, action: "auth.login.failed", metadata: { reason } });
-    await sleep(500); // throttle brute-force / timing
     return { success: false, error: INVALID };
   };
 
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !user.isActive) {
-    return fail(user ? "inactive" : "no_user");
-  }
 
-  const valid = await verifyPassword(parsed.data.password, user.passwordHash);
-  if (!valid) {
-    return fail("bad_password");
-  }
+  // Always run a bcrypt comparison — against the real hash, or a dummy one when
+  // the account doesn't exist. Returning early for an unknown email would make
+  // "no such user" measurably faster than "wrong password", which is enough to
+  // enumerate the student roll.
+  const valid = await verifyPassword(
+    parsed.data.password,
+    user?.passwordHash ?? DUMMY_HASH,
+  );
 
-  attempts.delete(email);
+  if (!user || !user.isActive) return fail(user ? "inactive" : "no_user");
+  if (!valid) return fail("bad_password");
+
+  // A legitimate user who mistyped a few times shouldn't stay throttled.
+  await clearRateLimit(limitKey);
 
   await createSession({
     userId: user.id,
@@ -159,4 +159,79 @@ export async function changePasswordAction(
 export async function logoutAction(): Promise<void> {
   await destroySession();
   redirect("/auth/login");
+}
+
+/**
+ * "I forgot my password" — issue a reset link.
+ *
+ * Always reports success, whatever happened. Saying "no account with that
+ * email" would let anyone test which addresses are registered, and the student
+ * roll is exactly the list an attacker would want.
+ */
+export async function requestPasswordResetAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const email = String(formData.get("email") || "").toLowerCase().trim();
+  const GENERIC =
+    "If that email is registered, we've sent a reset link. Please check your inbox.";
+
+  if (!email || !email.includes("@")) {
+    return { success: false, error: "Enter the email address on your account." };
+  }
+
+  // Throttle by email so this can't be used to spam somebody's inbox, and by
+  // extension can't be used to probe addresses at speed.
+  const gate = await rateLimit({ key: `reset:${email}`, limit: 3, windowSeconds: 15 * 60 });
+  if (!gate.allowed) return { success: true, message: GENERIC };
+
+  await prunePasswordResets();
+
+  try {
+    const request = await createPasswordReset(email);
+    if (request.token) {
+      await sendTemplatedEmail(
+        request.email,
+        EMAIL_SUBJECTS.passwordReset,
+        "passwordReset",
+        {
+          studentName: request.name ?? "there",
+          resetUrl: resetUrl(request.token),
+        },
+      ).catch(() => undefined);
+    }
+    await audit({ actorEmail: email, action: "auth.password_reset.requested" });
+  } catch {
+    // Never surface the reason — the response must not vary by outcome.
+  }
+
+  return { success: true, message: GENERIC };
+}
+
+/** Redeem a reset link and set the new password. */
+export async function resetPasswordAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const token = String(formData.get("token") || "");
+  const password = String(formData.get("password") || "");
+  const confirm = String(formData.get("confirmPassword") || "");
+
+  if (password !== confirm) {
+    return { success: false, error: "The two passwords don't match." };
+  }
+  if (password.length < 8) {
+    return { success: false, error: "Use at least 8 characters." };
+  }
+
+  const result = await redeemPasswordReset(token, password);
+  if (!result.ok) return { success: false, error: result.error };
+
+  await audit({ action: "auth.password_reset.completed" });
+  // Not signed in automatically: possession of an emailed link shouldn't hand
+  // out a session. They sign in with the password they just chose.
+  return {
+    success: true,
+    message: "Your password has been changed. You can now sign in.",
+  };
 }

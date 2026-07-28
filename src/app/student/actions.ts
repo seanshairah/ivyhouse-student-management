@@ -4,7 +4,14 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { createSelfPayment, pollAndSettle } from "@/services/payments";
-import type { PaymentPurpose } from "@/constants";
+import {
+  isPaymentPurpose,
+  monthlyRentFor,
+  type PaymentPurpose,
+} from "@/core/billing/pricing";
+import { canAccessPayment } from "@/core/auth/access";
+import { rateLimit, PAYMENT_LIMIT } from "@/core/auth/rate-limit";
+import { audit } from "@/services/audit";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -21,14 +28,25 @@ import {
 } from "@prisma/client";
 
 /**
- * Room options a student can pick during onboarding. Capacity drives how many
- * students share a room; price is the total monthly rent per student.
- * (Single rent is a placeholder until confirmed.)
+ * Room options a student can pick during onboarding.
+ *
+ * Prices come from the platform config rather than being written out again
+ * here — this table used to carry its own copy of the rent figures, so
+ * changing a rate in `src/platform/config.ts` silently left onboarding
+ * creating rooms at the old price.
  */
 const ROOM_SPEC: Record<string, { capacity: number; price: number; label: string }> = {
-  SINGLE: { capacity: 1, price: 120, label: "Single" },
-  SHARED_DOUBLE: { capacity: 2, price: 120, label: "2-bed sharing" },
-  SHARED_TRIPLE: { capacity: 3, price: 90, label: "3-bed sharing" },
+  SINGLE: { capacity: 1, price: monthlyRentFor(RoomType.SINGLE), label: "Single" },
+  SHARED_DOUBLE: {
+    capacity: 2,
+    price: monthlyRentFor(RoomType.SHARED_DOUBLE),
+    label: "2-bed sharing",
+  },
+  SHARED_TRIPLE: {
+    capacity: 3,
+    price: monthlyRentFor(RoomType.SHARED_TRIPLE),
+    label: "3-bed sharing",
+  },
 };
 
 type ActionResult = { success: boolean; error?: string };
@@ -39,22 +57,15 @@ async function getProfile(userId: string) {
 
 /**
  * Verify a payment reference belongs to the signed-in student before we act on
- * it. Without this, a student could poll/settle another student's payment by
- * reference. Settlement always credits the payment's own owner, but this keeps
- * one student from touching another's payment at all.
+ * it, so one student can never poll or settle another's payment. Delegates to
+ * the shared access module so every ownership rule lives in one place.
  */
 async function assertOwnsPayment(
   userId: string,
   reference: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const payment = await prisma.payment.findUnique({
-    where: { reference },
-    select: { studentProfile: { select: { userId: true } } },
-  });
-  if (!payment) return { ok: false, error: "Payment not found" };
-  if (payment.studentProfile.userId !== userId) {
-    return { ok: false, error: "This payment isn't on your account." };
-  }
+  const allowed = await canAccessPayment({ userId, role: "STUDENT" }, reference);
+  if (!allowed) return { ok: false, error: "This payment isn't on your account." };
   return { ok: true };
 }
 
@@ -138,8 +149,20 @@ export async function initiateSelfPaymentAction(input: {
   try {
     const profile = await getProfile(session.userId);
     if (!profile) return { success: false, error: "Profile not found" };
-    if (!["RENT_MONTH", "RENT_SEMESTER", "TRANSPORT"].includes(input.purpose)) {
+    // The client picks WHAT to pay for; the server decides how much that costs.
+    if (!isPaymentPurpose(input.purpose)) {
       return { success: false, error: "Invalid payment type" };
+    }
+
+    // Every initiation round-trips to Paynow, so cap the rate. The duplicate
+    // guard in createSelfPayment already collapses rapid identical attempts;
+    // this stops a loop churning through distinct ones.
+    const gate = await rateLimit({ key: `pay:${profile.id}`, ...PAYMENT_LIMIT });
+    if (!gate.allowed) {
+      return {
+        success: false,
+        error: "Too many payment attempts. Please wait a few minutes and try again.",
+      };
     }
     const r = await createSelfPayment({
       profileId: profile.id,
@@ -147,7 +170,18 @@ export async function initiateSelfPaymentAction(input: {
       method: input.method,
       phone: input.phone,
     });
-    if (!r.ok) return { success: false, error: r.error, reference: r.reference };
+    if (!r.ok) {
+      // Record why, so a failure that never reaches the Payment table still
+      // leaves a trace. Without this the only evidence lives in the hosting
+      // provider's function logs, which nobody looks at until it is too late.
+      await audit({
+        userId: session.userId,
+        actorEmail: session.email,
+        action: "payment.initiate_failed",
+        metadata: { purpose: input.purpose, method: input.method, reason: r.error ?? null },
+      }).catch(() => undefined);
+      return { success: false, error: r.error, reference: r.reference };
+    }
     revalidatePath("/student/payments");
     return {
       success: true,
@@ -157,7 +191,23 @@ export async function initiateSelfPaymentAction(input: {
       amount: r.amount,
     };
   } catch (e) {
-    return { success: false, error: (e as Error).message };
+    // Never let an exception escape a payment action: an unhandled rejection
+    // in the browser takes the whole page to the error boundary, so the student
+    // sees a blank "Something went wrong" moments after pressing pay.
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("[payment.initiate] unhandled", detail);
+    await audit({
+      userId: session.userId,
+      actorEmail: session.email,
+      action: "payment.initiate_error",
+      metadata: { purpose: input.purpose, method: input.method, detail },
+    }).catch(() => undefined);
+    return {
+      success: false,
+      error:
+        "We couldn't start the payment. No money has left your account — " +
+        "please try again, or contact the office if it keeps happening.",
+    };
   }
 }
 
@@ -294,7 +344,10 @@ export async function completeOnboardingAction(
           roomId: room.id,
           houseId,
           status: StudentStatus.ACTIVE,
-          usesTransport: formData.get("usesTransport") === "on",
+          // One-time stamp. The dashboard gate reads this rather than roomId,
+          // so a later room change cannot resend the student through onboarding.
+          onboardingCompletedAt: new Date(),
+          transportOptIn: formData.get("transportOptIn") === "on",
           nextOfKinName,
           nextOfKinPhone,
           nextOfKinRelation,

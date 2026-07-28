@@ -30,6 +30,8 @@ export interface StudentRow {
   roomNumber: string | null;
   status: string;
   balance: number;
+  /** Portion of the balance already past its due date. */
+  arrears: number;
 }
 
 const STATUSES = Object.keys(STUDENT_STATUS_META);
@@ -111,6 +113,11 @@ export function StudentsTable({
                   </TableCell>
                   <TableCell className={s.balance > 0 ? "font-medium text-rose-600" : ""}>
                     {formatCurrency(s.balance)}
+                    {s.arrears > 0 ? (
+                      <span className="ml-1.5 rounded-full bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-950/60 dark:text-rose-200">
+                        {formatCurrency(s.arrears)} overdue
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{s.phone}</TableCell>
                   <TableCell className="text-right">
