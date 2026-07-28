@@ -3,6 +3,7 @@ import { XCircle, AlertTriangle, CreditCard } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { resolveReturnReference } from "@/services/payments";
+import { getStudentBalance } from "@/services/invoices";
 import { confirmPaymentReturn } from "@/app/student/actions";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -76,6 +77,10 @@ export default async function PaymentReturnPage({
 
   const amount = Number(payment.amount);
   const isPaid = payment.status === "PAID";
+  // Fetched fresh, after settlement — this IS the number the payment moved,
+  // whichever charge the money actually landed on (oldest debt first, not
+  // necessarily the one just raised for this attempt).
+  const balance = isPaid ? await getStudentBalance(profile.id) : null;
 
   return (
     <div className="mx-auto max-w-lg space-y-6">
@@ -104,6 +109,7 @@ export default async function PaymentReturnPage({
               amount={amount}
               receiptNumber={payment.receipt?.number}
               receiptId={payment.receipt?.id}
+              balanceAfter={balance?.balance}
             />
           ) : (
             <div className="flex flex-col items-center text-center">
