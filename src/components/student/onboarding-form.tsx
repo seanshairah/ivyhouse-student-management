@@ -115,7 +115,7 @@ export function OnboardingForm({ defaults }: { defaults: Defaults }) {
           <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border p-4 hover:bg-accent">
             <input
               type="checkbox"
-              name="usesTransport"
+              name="transportOptIn"
               className="mt-0.5 size-4 accent-brand-600"
             />
             <span className="text-sm">

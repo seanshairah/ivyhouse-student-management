@@ -1,0 +1,340 @@
+# The Student Housing Operating System
+
+One engine, two brands. This document explains how the shared system works, and
+what is allowed to differ between the two platforms that run on it.
+
+> This file is part of the shared core and is **identical** in both
+> repositories. If something here is only true of one platform, it belongs in
+> `src/platform/config.ts` instead.
+
+---
+
+## 1. Architecture
+
+Two deployments, two databases, one codebase.
+
+```
+  ivyhouse.co.zw                          blessbriproperties.co.zw
+        │                                           │
+   ┌────┴─────────────┐                   ┌─────────┴────────┐
+   │  Ivy House app   │                   │  Blessbri app    │
+   │                  │                   │                  │
+   │  marketing site  │  ← independent →  │  marketing site  │
+   │  (own brand)     │                   │  (own brand)     │
+   ├──────────────────┤                   ├──────────────────┤
+   │ src/platform/    │                    │ src/platform/    │
+   │   config.ts      │  ← ONLY diff →     │   config.ts      │
+   ├──────────────────┤                   ├──────────────────┤
+   │  src/core/**     │  ═ identical ═     │  src/core/**     │
+   │  payments, ledger│                    │  payments, ledger│
+   │  auth, schema    │                    │  auth, schema    │
+   └────────┬─────────┘                   └─────────┬────────┘
+            │                                       │
+      ┌─────┴──────┐                          ┌─────┴──────┐
+      │ Ivy DB     │                          │ Blessbri DB│
+      └────────────┘                          └────────────┘
+```
+
+**Why separate databases rather than one multi-tenant database?**
+
+These are two different businesses. The requirement is that a user or
+administrator on one platform can never reach the other's records. There were
+three options:
+
+| Option | Isolation | Risk |
+|---|---|---|
+| One multi-tenant app + shared DB | Depends on every query remembering a `where tenantId` | High — ~20 models, none had a tenant column, and there were no tests to catch a missed filter |
+| Shared codebase, separate DBs | Physical — no shared rows exist | Low |
+| Shared core package, two apps | Same as above, plus packaging work | Low, more moving parts |
+
+We chose **separate databases**. Cross-tenant leakage is impossible by
+construction rather than by discipline: there is no query you can write in the
+Ivy House app that reaches a Blessbri row, because the row is not in the
+database it is connected to. Retrofitting row-level tenancy into every query in
+a codebase that had zero tests would have been the riskiest available option.
+
+This also keeps the `Settings` singleton and the invoice/receipt/statement
+numbering counters correct — each business gets its own sequence.
+
+**Defence in depth.** `Settings.platformKey` records which platform a database
+belongs to. `assertDatabaseBelongsToPlatform()` in `src/core/platform/index.ts`
+refuses to use a database that claims to belong to somebody else, so a
+copy-pasted `DATABASE_URL` fails loudly instead of quietly serving one
+business's students under the other's brand.
+
+---
+
+## 2. What is shared, and what is not
+
+**Shared (identical in both repos — never fork these):**
+
+```
+src/core/platform/     platform config types + env and database guards
+src/core/billing/      the ledger and pricing — all money logic
+src/services/payments/ Paynow integration and settlement
+src/services/invoices/ invoice documents and balance access
+src/services/reports/  owner reporting
+src/lib/auth.ts        sessions, password hashing
+src/lib/session.ts     requireUser / requireRole
+prisma/schema.prisma   the database schema
+tests/                 the test suite
+```
+
+**Platform-specific (allowed and expected to differ):**
+
+```
+src/platform/config.ts       name, contact, senders, rates, prefixes
+src/app/page.tsx             the public landing page
+src/app/houses, /about       public marketing pages
+src/components/marketing/**  brand imagery, copy, hero, testimonials
+tailwind.config.ts           brand colours
+public/                      logos and images
+```
+
+The marketing sites are deliberately **not** driven by the config file. They are
+separate brands with separate audiences and are meant to look nothing alike.
+
+---
+
+## 3. The ledger — how money works
+
+This is the part to understand before changing anything financial.
+
+### One source of truth
+
+A balance is never stored. It is always derived:
+
+```
+balance = sum(OUTSTANDING charges) − sum(allocations against those charges)
+```
+
+`getStudentAccount()` in `src/core/billing/ledger.ts` is the only function that
+answers "what does this student owe?". The student dashboard, the owner's
+student page and the reports all call it, so they cannot disagree.
+
+### Rent and transport are separate by construction
+
+Every `Charge` carries a `ChargeCategory`:
+
+```
+RENT · TRANSPORT · DEPOSIT · PENALTY · ADJUSTMENT · OTHER
+```
+
+The category is recorded when the charge is raised. It is never inferred from
+text. (Previously one platform decided "is this a deposit?" with
+`reference.startsWith("DEP-")` and the other with `/deposit/i` against a
+free-text description — two different answers to the same question.)
+
+`getStudentAccount()` returns `rent`, `transport` and `other` as their own
+balances, plus `totalOutstanding` — so a student sees both the split and the
+combined position.
+
+### Payments attach to charges through allocations
+
+```
+  Charge  ◄──── PaymentAllocation ────►  Payment
+  (what is owed)   (how much of that      (money received)
+                    payment covers it)
+```
+
+This is what makes the awkward cases work without special-casing:
+
+- **Partial payment** — one charge, several allocations, remainder still owing.
+- **Combined payment** — one payment, several allocations across categories.
+- **Overpayment** — leftover stays as `unallocatedCredit`; money is never lost.
+- **Refund** — `deallocatePayment()` removes the allocations and returns the
+  charges to `OUTSTANDING`.
+
+Allocation order: the payment's own category first (a transport payment clears
+transport debt, never rent), then oldest due date first.
+
+### Idempotency
+
+`PaymentAllocation` is unique on `(paymentId, chargeId)`, and `allocatePayment()`
+first undoes anything the payment previously did, then redoes it. A webhook that
+fires three times produces exactly one allocation and one receipt.
+
+---
+
+## 4. The payment lifecycle
+
+```
+  student picks a PURPOSE (never an amount)
+        │
+        ▼
+  createSelfPayment()
+    ├─ prices the purpose server-side from the room tier + platform config
+    ├─ reuses any identical payment started in the last 90s (double-click guard)
+    ├─ raises the Charge  ← the debt exists before the money is asked for
+    └─ initiates with Paynow (EcoCash / OneMoney prompt, or hosted checkout)
+        │
+        ▼
+  PENDING ──────────────────────────────────────┐
+        │                                       │
+   Paynow confirms                        student cancels
+        │                                    / declines
+        ▼                                       ▼
+  settlePayment()  (one transaction)         FAILED / CANCELLED
+    ├─ status → PAID
+    ├─ receipt issued
+    └─ allocatePayment() → balance moves
+        │
+        ▼
+     PAID ──── provider reverses ────► REFUNDED
+                                        └─ charges return to OUTSTANDING
+```
+
+### Rules that are enforced in code, not by convention
+
+1. **The browser never sets an amount.** It sends a `PaymentPurpose`
+   (`RENT_MONTH` / `RENT_SEMESTER` / `TRANSPORT_MONTH`); `priceFor()` decides
+   the money.
+2. **The webhook body is never trusted.** `POST /api/payments/paynow/result`
+   takes only the `reference` from the payload and then re-polls Paynow
+   server-to-server. A forged `status=Paid` cannot settle anything.
+3. **Only `settlePayment()` may set `PAID`,** and only after Paynow confirms.
+4. **The state machine is explicit.** `canTransition()` permits:
+
+   | From | To |
+   |---|---|
+   | `PENDING` | `PROCESSING`, `PAID`, `FAILED`, `CANCELLED` |
+   | `PROCESSING` | `PAID`, `FAILED`, `CANCELLED` |
+   | `PAID` | `REFUNDED` *(the only way out of PAID)* |
+   | `FAILED` | `PENDING` *(provider retry of the same reference)* |
+   | `CANCELLED`, `REFUNDED` | terminal |
+
+   Anything else is rejected and logged, so a late or out-of-order callback
+   cannot rewrite settled history.
+5. **Mock mode cannot run in production.** In development `verifyPaynowPayment()`
+   reports every payment as paid; `getPaynowConfig()` throws in production if the
+   Paynow credentials are missing rather than silently falling back to it.
+
+---
+
+## 5. Configuration
+
+`src/platform/config.ts` holds everything a platform is allowed to vary:
+
+| Field | What it controls |
+|---|---|
+| `key` | `"ivy-house"` / `"blessbri"` — must match `Settings.platformKey` |
+| `name`, `legalName`, `tagline` | how the platform refers to itself in the OS |
+| `contact` | support details shown to students |
+| `senders.emailFrom` | must be on a domain verified with the email provider |
+| `senders.smsSenderId` | must be an approved sender ID |
+| `billing.rentByRoomType` | monthly rent per sharing tier |
+| `billing.transportMonthlyFee` | flat monthly transport fee |
+| `billing.semesterMonths` | months billed as one semester |
+| `billing.paymentTermsDays` | days before a charge counts as arrears |
+| `billing.allowPartial/CombinedPayments` | payment policy |
+| `documents.*Prefix` | invoice / receipt / statement numbering prefixes |
+
+### Required environment variables
+
+The app **refuses to start in production** without these:
+
+```
+DATABASE_URL          this platform's own database — never the other one's
+NEXTAUTH_SECRET       openssl rand -base64 32
+```
+
+Required for real payments (production throws without them):
+
+```
+PAYNOW_INTEGRATION_ID
+PAYNOW_INTEGRATION_KEY
+PAYNOW_MODE=live
+PAYNOW_RETURN_URL     https://<domain>/student/payments/return
+PAYNOW_RESULT_URL     https://<domain>/api/payments/paynow/result
+```
+
+Optional (features degrade quietly if absent): `RESEND_API_KEY`,
+`RESEND_FROM_EMAIL`, SMTP fallback, `SMSPOP_API_KEY`, `SMSPOP_SENDER_ID`.
+
+---
+
+## 6. Running and deploying
+
+```bash
+npm install
+cp .env.example .env          # fill in DATABASE_URL + NEXTAUTH_SECRET
+npx prisma migrate deploy     # apply migrations
+npm run db:seed               # demo data (development only)
+npm run dev
+```
+
+Checks:
+
+```bash
+npm run typecheck
+npm run lint
+npm test                      # needs a PostgreSQL database
+npm run build
+```
+
+### Migrations
+
+`prisma/migrations/` contains:
+
+- `20260728000000_init` — the schema as it stood before unification.
+- `20260728000100_unified_ledger` — charges, allocations, indexes, the
+  `usesTransport → transportOptIn` rename, and a **backfill** that turns
+  existing invoices into charges and re-creates their allocations, so balances
+  do not reset to zero.
+
+**On a database that predates migrations** (both platforms used `prisma db push`
+and have no `_prisma_migrations` table), mark the baseline as already applied
+before deploying, or `migrate deploy` will try to recreate existing tables:
+
+```bash
+npx prisma migrate resolve --applied 20260728000000_init
+npx prisma migrate deploy
+```
+
+Take a database snapshot first. The backfill is additive — it inserts `Charge`
+and `PaymentAllocation` rows and renames one column — but the rename is not
+reversible without a restore.
+
+### Rollback
+
+The previous release runs against the migrated schema: the new tables are
+additive and the old code ignores them. The one exception is the
+`usesTransport → transportOptIn` rename, which the old code still reads. To roll
+back the application without restoring the database:
+
+```sql
+ALTER TABLE "StudentProfile" RENAME COLUMN "transportOptIn" TO "usesTransport";
+```
+
+Then redeploy the previous build. To roll back fully, restore the snapshot.
+
+---
+
+## 7. Roles
+
+| Role | Can do |
+|---|---|
+| `OWNER` | everything: students, rooms, applications, charges, payments, reports, settings |
+| `CARETAKER` | house operations and service requests |
+| `STUDENT` | their own account, payments, receipts, service requests |
+
+Enforcement is layered:
+
+- `src/middleware.ts` gates `/owner`, `/student`, `/caretaker` by role from the
+  session cookie.
+- `requireUser()` / `requireRole()` re-read the user from the database on every
+  protected page, so a deactivated account or a pending forced password change
+  takes effect immediately rather than when the 7-day JWT expires.
+- Server actions additionally assert **ownership** — `assertOwnsPayment()` means
+  a student cannot poll, settle or read a payment that is not theirs.
+
+---
+
+## 8. Adding a third platform
+
+1. Fork the repository.
+2. Replace `src/platform/config.ts` with the new platform's values and add its
+   `key` to `PlatformKey` in `src/core/platform/types.ts`.
+3. Replace the marketing pages, `public/` assets and `tailwind.config.ts` colours.
+4. Provision a new database; set `Settings.platformKey` to the new key.
+5. Leave `src/core/**` alone.

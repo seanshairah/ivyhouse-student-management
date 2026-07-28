@@ -30,17 +30,31 @@ export interface PaynowConfig {
 }
 
 export function getPaynowConfig(): PaynowConfig {
+  const integrationId = process.env.PAYNOW_INTEGRATION_ID || "";
+  const integrationKey = process.env.PAYNOW_INTEGRATION_KEY || "";
+  const hasCredentials = Boolean(integrationId && integrationKey);
+
+  // Fail closed in production.
+  //
+  // This used to silently fall back to "development" whenever the Paynow
+  // credentials were missing — and in development mode verifyPaynowPayment()
+  // reports every payment as Paid without contacting anyone. A production
+  // deploy that lost its Paynow env vars would therefore have marked every
+  // student's rent as settled for free, and looked healthy doing it.
+  if (process.env.NODE_ENV === "production" && !hasCredentials) {
+    throw new Error(
+      "PAYNOW_INTEGRATION_ID / PAYNOW_INTEGRATION_KEY are not set. Refusing to " +
+        "run in mock payment mode in production — mock mode settles every " +
+        "payment as paid without taking money.",
+    );
+  }
+
   return {
-    integrationId: process.env.PAYNOW_INTEGRATION_ID || "",
-    integrationKey: process.env.PAYNOW_INTEGRATION_KEY || "",
+    integrationId,
+    integrationKey,
     returnUrl: process.env.PAYNOW_RETURN_URL || "http://localhost:3000/student/payments/return",
     resultUrl: process.env.PAYNOW_RESULT_URL || "http://localhost:3000/api/payments/paynow/result",
-    mode:
-      process.env.PAYNOW_MODE === "live" &&
-      process.env.PAYNOW_INTEGRATION_ID &&
-      process.env.PAYNOW_INTEGRATION_KEY
-        ? "live"
-        : "development",
+    mode: process.env.PAYNOW_MODE === "live" && hasCredentials ? "live" : "development",
   };
 }
 
@@ -156,9 +170,12 @@ export async function createPaynowPayment(
   }
 }
 
+/** Mobile-money rails Paynow can push a USSD prompt to. */
+export type MobileMethod = "ecocash" | "onemoney" | "innbucks";
+
 export interface InitiateMobileInput extends InitiatePaymentInput {
   phone: string;
-  method?: "ecocash" | "onemoney" | "innbucks";
+  method?: MobileMethod;
 }
 
 export interface InitiateMobileResult {

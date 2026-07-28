@@ -23,9 +23,11 @@ export async function GET(req: Request) {
       rows = data.map((d) => ({
         Student: d.name,
         House: d.house,
-        Invoiced: d.due,
-        Paid: d.paid,
+        Rent: d.rent,
+        Transport: d.transport,
+        Other: d.other,
         Balance: d.balance,
+        Arrears: d.arrears,
       }));
       filename = "outstanding-balances.csv";
       break;

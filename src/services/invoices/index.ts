@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { InvoiceStatus, type Prisma } from "@prisma/client";
+import { InvoiceStatus, ChargeCategory, type Prisma } from "@prisma/client";
 import { nextNumber } from "@/services/numbering";
+import { getStudentAccount } from "@/core/billing/ledger";
 import { toNumber } from "@/lib/utils";
 
 export interface CreateInvoiceInput {
@@ -61,11 +62,53 @@ export async function updateInvoiceAfterPayment(
   });
 }
 
-export async function getStudentBalance(studentProfileId: string) {
-  const invoices = await prisma.invoice.findMany({
-    where: { studentProfileId, status: { not: "CANCELLED" } },
+/**
+ * A student's balance, derived from the charge ledger.
+ *
+ * This used to sum Invoice.amount and Invoice.amountPaid, which meant any
+ * payment not attached to an invoice — every self-service rent and transport
+ * payment — was invisible to it. It now delegates to the ledger, which is the
+ * one authoritative answer, and additionally reports rent and transport
+ * separately as well as combined.
+ */
+export type StudentBalance = Awaited<ReturnType<typeof getStudentBalance>>;
+
+/** A zero balance, for students who have no profile or no charges yet. */
+export function emptyStudentBalance(): StudentBalance {
+  const zero = (category: ChargeCategory) => ({
+    category,
+    charged: 0,
+    paid: 0,
+    outstanding: 0,
+    arrears: 0,
+    nextDueDate: null,
   });
-  const totalDue = invoices.reduce((s, i) => s + toNumber(i.amount), 0);
-  const totalPaid = invoices.reduce((s, i) => s + toNumber(i.amountPaid), 0);
-  return { totalDue, totalPaid, balance: totalDue - totalPaid };
+  return {
+    totalDue: 0,
+    totalPaid: 0,
+    balance: 0,
+    rent: zero(ChargeCategory.RENT),
+    transport: zero(ChargeCategory.TRANSPORT),
+    other: zero(ChargeCategory.OTHER),
+    arrears: 0,
+    inArrears: false,
+    nextDueDate: null,
+    credit: 0,
+  };
+}
+
+export async function getStudentBalance(studentProfileId: string) {
+  const account = await getStudentAccount(studentProfileId);
+  return {
+    totalDue: account.totalCharged,
+    totalPaid: account.totalPaid,
+    balance: account.totalOutstanding,
+    rent: account.rent,
+    transport: account.transport,
+    other: account.other,
+    arrears: account.totalArrears,
+    inArrears: account.inArrears,
+    nextDueDate: account.nextDueDate,
+    credit: account.unallocatedCredit,
+  };
 }

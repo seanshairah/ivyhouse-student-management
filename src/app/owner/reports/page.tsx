@@ -141,9 +141,10 @@ export default async function OwnerReportsPage() {
                 <TableRow>
                   <TableHead>Student</TableHead>
                   <TableHead>House</TableHead>
-                  <TableHead>Invoiced</TableHead>
-                  <TableHead>Paid</TableHead>
+                  <TableHead>Rent</TableHead>
+                  <TableHead>Transport</TableHead>
                   <TableHead>Balance</TableHead>
+                  <TableHead>Arrears</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -151,9 +152,16 @@ export default async function OwnerReportsPage() {
                   <TableRow key={o.id}>
                     <TableCell className="font-medium">{o.name}</TableCell>
                     <TableCell className="text-muted-foreground">{o.house}</TableCell>
-                    <TableCell>{formatCurrency(o.due)}</TableCell>
-                    <TableCell>{formatCurrency(o.paid)}</TableCell>
+                    <TableCell>{formatCurrency(o.rent)}</TableCell>
+                    <TableCell>{formatCurrency(o.transport)}</TableCell>
                     <TableCell className="font-medium text-rose-600">{formatCurrency(o.balance)}</TableCell>
+                    <TableCell>
+                      {o.inArrears ? (
+                        <span className="font-medium text-rose-600">{formatCurrency(o.arrears)}</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

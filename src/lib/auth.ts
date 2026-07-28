@@ -15,7 +15,21 @@ export interface SessionPayload {
 }
 
 function getSecret(): Uint8Array {
-  const secret = process.env.NEXTAUTH_SECRET || "insecure-development-secret-change-me";
+  const secret = process.env.NEXTAUTH_SECRET;
+
+  // Fail closed. This used to fall back to a fixed string that is committed to
+  // the repository, so a production deploy with NEXTAUTH_SECRET unset would
+  // keep serving traffic while signing session cookies with a secret anybody
+  // could read — enough to forge an OWNER session. Refuse instead.
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "NEXTAUTH_SECRET is not set. Refusing to sign sessions with a default " +
+          "secret in production. Generate one with: openssl rand -base64 32",
+      );
+    }
+    return new TextEncoder().encode("development-only-secret-not-for-production");
+  }
   return new TextEncoder().encode(secret);
 }
 

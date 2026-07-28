@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
-import { getStudentBalance } from "@/services/invoices";
+import { getStudentBalance, emptyStudentBalance } from "@/services/invoices";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import {
@@ -49,7 +49,7 @@ export default async function StudentHomePage() {
       }),
       profile
         ? getStudentBalance(profile.id)
-        : Promise.resolve({ totalDue: 0, totalPaid: 0, balance: 0 }),
+        : Promise.resolve(emptyStudentBalance()),
       profile
         ? prisma.payment.findFirst({
             where: { studentProfileId: profile.id, status: PaymentStatus.PENDING },
@@ -91,11 +91,19 @@ export default async function StudentHomePage() {
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard
-          label="Outstanding balance"
+          label="Total due"
           value={formatCurrency(balance.balance)}
           icon="Wallet"
-          accent={balance.balance > 0 ? "rose" : "emerald"}
-          hint={balance.balance > 0 ? "Amount due" : "You're all paid up"}
+          accent={balance.inArrears ? "rose" : balance.balance > 0 ? "amber" : "emerald"}
+          // The breakdown is what students ask about first: "how much of that is
+          // rent, and how much is transport?"
+          hint={
+            balance.balance > 0
+              ? `Rent ${formatCurrency(balance.rent.outstanding)} · Transport ${formatCurrency(
+                  balance.transport.outstanding,
+                )}`
+              : "You're all paid up"
+          }
         />
         <StatCard
           label="Your room"
@@ -164,7 +172,7 @@ export default async function StudentHomePage() {
               variant="brand"
             />
             <EcocashPayDialog
-              purpose="TRANSPORT"
+              purpose="TRANSPORT_MONTH"
               amount={TRANSPORT_FEE}
               title="Transport service"
               triggerLabel={`Transport · ${formatCurrency(TRANSPORT_FEE)}`}

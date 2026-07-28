@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { createSelfPayment, pollAndSettle } from "@/services/payments";
-import type { PaymentPurpose } from "@/constants";
+import { isPaymentPurpose, type PaymentPurpose } from "@/core/billing/pricing";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -138,7 +138,8 @@ export async function initiateSelfPaymentAction(input: {
   try {
     const profile = await getProfile(session.userId);
     if (!profile) return { success: false, error: "Profile not found" };
-    if (!["RENT_MONTH", "RENT_SEMESTER", "TRANSPORT"].includes(input.purpose)) {
+    // The client picks WHAT to pay for; the server decides how much that costs.
+    if (!isPaymentPurpose(input.purpose)) {
       return { success: false, error: "Invalid payment type" };
     }
     const r = await createSelfPayment({
@@ -294,7 +295,7 @@ export async function completeOnboardingAction(
           roomId: room.id,
           houseId,
           status: StudentStatus.ACTIVE,
-          usesTransport: formData.get("usesTransport") === "on",
+          transportOptIn: formData.get("transportOptIn") === "on",
           nextOfKinName,
           nextOfKinPhone,
           nextOfKinRelation,
