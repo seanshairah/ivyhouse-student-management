@@ -77,9 +77,20 @@ function authEmailFallback(payerEmail: string | null | undefined, used: string):
   return null;
 }
 
-/** Did Paynow reject us specifically over the authemail field? */
+/**
+ * Did Paynow reject us over the authemail field, in a way a different address
+ * could actually fix?
+ *
+ * In test mode Paynow requires the merchant's OWN registered address and says
+ * so. Retrying with the payer's address cannot satisfy that, so a retry is a
+ * wasted round-trip — the only fix is setting PAYNOW_AUTH_EMAIL correctly, or
+ * the merchant account leaving test mode.
+ */
 function isAuthEmailRejection(raw: string | undefined): boolean {
-  return /authemail/i.test(raw ?? "");
+  const s = (raw ?? "").toLowerCase();
+  if (!s.includes("authemail")) return false;
+  if (s.includes("test mode") || s.includes("must match")) return false;
+  return true;
 }
 
 /**
@@ -93,11 +104,20 @@ function isAuthEmailRejection(raw: string | undefined): boolean {
 export function friendlyPaynowError(raw: string | undefined): string {
   const s = (raw ?? "").toLowerCase();
 
+  // Test mode: Paynow accepts only the merchant's own registered address, and
+  // says so explicitly. This is configuration, not something the payer did.
+  if (s.includes("test mode") || (s.includes("authemail") && s.includes("match"))) {
+    return (
+      "Online payments are still in test mode with the payment provider, so " +
+      "this can't be completed yet. Please pay at the office for now; no money " +
+      "has left your account."
+    );
+  }
   if (s.includes("authemail")) {
     return (
-      "Payments aren't set up correctly yet — the account this platform uses " +
-      "to take payments is missing its contact address. Please tell the office; " +
-      "no money has left your account."
+      "Payments aren't set up correctly yet — the address this platform gives " +
+      "the payment provider isn't accepted. Please tell the office; no money " +
+      "has left your account."
     );
   }
   if (s.includes("testing") || s.includes("cannot accept payments")) {

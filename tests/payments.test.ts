@@ -691,3 +691,18 @@ describe("a wrong PAYNOW_AUTH_EMAIL must not stop people paying", () => {
     expect(resolveAuthEmail("someone@nowhere.test")).not.toContain(".test");
   });
 });
+
+describe("Paynow test-mode rejection is reported honestly", () => {
+  const TEST_MODE_ERROR =
+    "The integration ID is in test mode, so if authemail is specified then it " +
+    "must match the merchants registered email address (c*******b@i*****.com)";
+
+  it("tells the student it is a provider setup issue, not their mistake", () => {
+    const msg = friendlyPaynowError(TEST_MODE_ERROR);
+    expect(msg).toContain("test mode");
+    expect(msg).toContain("no money has left your account");
+    // Never leak the provider's wording, including the masked merchant address.
+    expect(msg).not.toContain("authemail");
+    expect(msg).not.toContain("@");
+  });
+});
