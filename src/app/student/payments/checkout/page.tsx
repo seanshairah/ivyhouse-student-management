@@ -102,6 +102,11 @@ export default async function CheckoutPage({
             <p className="mt-1 font-display text-4xl font-bold tracking-tight">
               {formatCurrency(amount)}
             </p>
+            {/* Spelled out because "$" alone is ambiguous in a two-currency
+                market, and this platform only ever bills in US dollars. */}
+            <p className="mt-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {config.currency}
+            </p>
           </div>
 
           <Separator />

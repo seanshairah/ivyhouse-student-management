@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { updateSettings } from "@/app/owner/actions";
+import { CURRENCY } from "@/core/billing/pricing";
 
 export interface SettingsData {
   businessName: string;
@@ -54,7 +55,14 @@ export function SettingsForm({ settings }: { settings: SettingsData }) {
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="currency">Currency</Label>
-          <Input id="currency" name="currency" defaultValue={settings.currency} />
+          {/* Not editable: which account the money lands in is decided by the
+              Paynow integration, not by a field here. Letting someone type
+              "ZWG" would relabel every invoice and receipt while the payments
+              themselves kept going to the USD account. */}
+          <Input id="currency" name="currency" value={CURRENCY} readOnly disabled />
+          <p className="text-xs text-muted-foreground">
+            Fixed. Rent, transport and receipts are all in US dollars.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="paymentTermsDays">Payment terms (days)</Label>

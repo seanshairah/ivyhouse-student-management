@@ -197,6 +197,8 @@ export interface RaiseChargeInput {
   periodStart?: Date | null;
   periodEnd?: Date | null;
   invoiceId?: string | null;
+  /** The payment attempt this charge was raised for, if any. */
+  originPaymentId?: string | null;
 }
 
 /**
@@ -224,12 +226,89 @@ export async function raiseCharge(
       periodStart: input.periodStart ?? null,
       periodEnd: input.periodEnd ?? null,
       invoiceId: input.invoiceId ?? null,
+      originPaymentId: input.originPaymentId ?? null,
       status: ChargeStatus.OUTSTANDING,
     },
   });
 
   await applyCreditToCharge(charge.id, client);
   return charge;
+}
+
+/**
+ * Withdraw the charges a payment attempt raised, once that attempt can no
+ * longer produce money.
+ *
+ * This is the counterpart to raising a charge before taking payment. A student
+ * who opens the Paynow checkout and closes the tab, or ignores the EcoCash
+ * prompt, has agreed to nothing — leaving the charge standing bills them for
+ * it. Their balance then climbs every time they start a payment and change
+ * their mind, which is exactly what happened in production: three abandoned
+ * checkouts turned a $240 rent balance into $600.
+ *
+ * Two conditions make this safe to run at any time:
+ *
+ *   - only charges linked to THIS payment are touched, so a charge the office
+ *     raised separately is never caught up in it;
+ *   - only charges with no allocations, so a debt that has been part-paid
+ *     survives — money already received always keeps something to sit against.
+ *
+ * Returns the number of charges withdrawn.
+ */
+export async function withdrawChargesForPayment(
+  paymentId: string,
+  note: string,
+  client: Prisma.TransactionClient = prisma,
+  actorId?: string | null,
+): Promise<number> {
+  const result = await client.charge.updateMany({
+    where: {
+      originPaymentId: paymentId,
+      status: ChargeStatus.OUTSTANDING,
+      allocations: { none: {} },
+    },
+    data: {
+      status: ChargeStatus.CANCELLED,
+      adjustmentNote: note,
+      adjustedById: actorId ?? null,
+    },
+  });
+  return result.count;
+}
+
+/**
+ * Withdraw charges left standing by an attempt that has already ended without
+ * paying.
+ *
+ * The withdrawal above happens as a payment dies, which covers everything from
+ * here on. It does nothing for charges already stranded — a payment cancelled
+ * months ago, back when nothing withdrew anything, is terminal and will never
+ * be revisited, so its charge sits on the student's account forever. One real
+ * example: a student on the Blessbri platform was carrying $120 of rent from a
+ * checkout cancelled five days earlier.
+ *
+ * Safe to run repeatedly, and bounded by the same two rules as everything else
+ * in this module: the charge must be linked to that specific payment, and
+ * nothing may have been allocated against it.
+ */
+export async function withdrawStrandedCharges(
+  client: Prisma.TransactionClient = prisma,
+): Promise<number> {
+  const result = await client.charge.updateMany({
+    where: {
+      status: ChargeStatus.OUTSTANDING,
+      allocations: { none: {} },
+      originPayment: {
+        status: { in: [PaymentStatus.CANCELLED, PaymentStatus.FAILED] },
+      },
+    },
+    data: {
+      status: ChargeStatus.CANCELLED,
+      adjustmentNote:
+        "Withdrawn — the payment request it was raised for ended without paying.",
+    },
+  });
+  return result.count;
 }
 
 /**

@@ -385,6 +385,19 @@ model Charge {
   adjustedById String?
   adjustmentNote String?
 
+  /// The payment attempt that raised this charge.
+  ///
+  /// A self-service charge is raised speculatively, before the money is taken,
+  /// so the ledger has something to allocate against when it arrives. If that
+  /// attempt then dies — declined, cancelled, or simply abandoned at the
+  /// provider's checkout — the charge has to come back off the account, or the
+  /// student is billed for accommodation they never paid for and never agreed
+  /// to. This link is what makes that withdrawal exact: the alternative was
+  /// matching on category and recency, which can just as easily cancel a
+  /// genuine charge raised by the office minutes earlier.
+  originPaymentId String?
+  originPayment   Payment? @relation("ChargeOrigin", fields: [originPaymentId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -393,6 +406,7 @@ model Charge {
   @@index([studentProfileId, status])
   @@index([studentProfileId, category, status])
   @@index([status, dueDate])
+  @@index([originPaymentId])
 }
 
 /// How much of a given payment was applied to a given charge.
@@ -441,6 +455,9 @@ model Payment {
   transaction PaymentTransaction?
   receipt     Receipt?
   allocations PaymentAllocation[]
+
+  /// Charges raised for this attempt, withdrawn again if it never settles.
+  originatedCharges Charge[] @relation("ChargeOrigin")
 
   @@index([studentProfileId, status])
   @@index([status, paidAt])

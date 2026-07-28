@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { PaymentStatus, ChargeStatus, type Prisma } from "@prisma/client";
+import { withdrawChargesForPayment } from "./ledger";
 
 /**
  * Uncleared payment requests — payments started and never finished.
@@ -94,7 +95,18 @@ export async function cancelUnclearedPayment(
 ): Promise<CancelResult> {
   const payment = await client.payment.findUnique({
     where: { reference },
-    select: { id: true, status: true, studentProfileId: true, category: true },
+    select: {
+      id: true,
+      status: true,
+      studentProfileId: true,
+      category: true,
+      amount: true,
+      createdAt: true,
+      // Only to know whether there is one — a payment recorded by the office,
+      // or one abandoned before we reached the provider, has none, and a
+      // nested update against a missing row throws.
+      transaction: { select: { id: true } },
+    },
   });
   if (!payment) return { ok: false, error: "Payment not found." };
 
@@ -117,47 +129,91 @@ export async function cancelUnclearedPayment(
     where: { id: payment.id },
     data: {
       status: PaymentStatus.CANCELLED,
-      transaction: {
-        update: { rawStatus: opts.reason ?? "cancelled-by-user" },
-      },
+      ...(payment.transaction
+        ? { transaction: { update: { rawStatus: opts.reason ?? "cancelled-by-user" } } }
+        : {}),
     },
   });
 
   // Withdraw the charge this attempt raised, if nothing was ever paid against it.
-  await client.charge.updateMany({
-    where: {
-      studentProfileId: payment.studentProfileId,
-      category: payment.category,
-      status: ChargeStatus.OUTSTANDING,
-      allocations: { none: {} },
-      createdAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) },
-    },
-    data: {
-      status: ChargeStatus.CANCELLED,
-      adjustmentNote: "Withdrawn — the payment request it was raised for was cancelled.",
-      adjustedById: opts.actorId ?? null,
-    },
-  });
+  const note = "Withdrawn — the payment request it was raised for was cancelled.";
+  const withdrawn = await withdrawChargesForPayment(
+    payment.id,
+    note,
+    client,
+    opts.actorId ?? null,
+  );
+
+  // Legacy fallback, for payments started before charges recorded which attempt
+  // raised them. Matched on student + category + exact amount within two
+  // minutes of the payment being created, because that is how narrow the window
+  // is: createSelfPayment raises the charge and writes the payment in the same
+  // breath. Anything looser risks withdrawing a charge the office raised.
+  if (withdrawn === 0) {
+    await client.charge.updateMany({
+      where: {
+        studentProfileId: payment.studentProfileId,
+        category: payment.category,
+        amount: payment.amount,
+        status: ChargeStatus.OUTSTANDING,
+        originPaymentId: null,
+        allocations: { none: {} },
+        createdAt: {
+          gte: new Date(payment.createdAt.getTime() - 120_000),
+          lte: new Date(payment.createdAt.getTime() + 120_000),
+        },
+      },
+      data: {
+        status: ChargeStatus.CANCELLED,
+        adjustmentNote: note,
+        adjustedById: opts.actorId ?? null,
+      },
+    });
+  }
 
   return { ok: true };
 }
 
 /**
- * Close out payment requests too old to complete.
+ * Close out payment requests too old to complete that never reached a provider.
  *
- * Runs from the daily cron rather than as its own scheduled job — there is no
- * need for more moving parts than the problem deserves.
+ * This used to close the payment and stop there, leaving the charge it had
+ * raised standing as a debt. Every abandoned checkout therefore added its
+ * amount to the student's balance permanently, which is how a $240 rent
+ * balance became $600. Expiring a payment now goes through the same path as
+ * cancelling one, so the charge comes off with it.
+ *
+ * The other half of that change is what this function deliberately will NOT do.
+ * Because closing a request now also erases the debt, writing off a payment
+ * that a provider might have collected would discard the money and the record
+ * of it together. So anything carrying a real poll URL is left for
+ * `reconcileAndExpirePayments()` in the payment service, which asks Paynow
+ * first. This function only closes requests there is nobody to ask about.
  */
 export async function expireStalePayments(
   olderThanMinutes = STALE_AFTER_MINUTES,
 ): Promise<number> {
   const cutoff = new Date(Date.now() - olderThanMinutes * 60_000);
-  const result = await prisma.payment.updateMany({
+  const stale = await prisma.payment.findMany({
     where: {
       status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
       createdAt: { lt: cutoff },
+      OR: [
+        { transaction: { is: null } },
+        { transaction: { pollUrl: null } },
+        { transaction: { pollUrl: { startsWith: "mock://" } } },
+      ],
     },
-    data: { status: PaymentStatus.CANCELLED },
+    select: { reference: true },
   });
-  return result.count;
+
+  let closed = 0;
+  for (const p of stale) {
+    // One at a time so a single failure can't abandon the rest half-done.
+    const r = await cancelUnclearedPayment(p.reference, {
+      reason: "expired-uncollected",
+    }).catch(() => ({ ok: false }) as CancelResult);
+    if (r.ok) closed += 1;
+  }
+  return closed;
 }

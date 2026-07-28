@@ -137,6 +137,16 @@ export function EcocashPayDialog({
           window.location.href = res.redirectUrl;
           return;
         }
+        // Started, but we were handed no link — an attempt already in flight
+        // that has no browser checkout of its own, for instance. The checkout
+        // route resolves one server-side and redirects, so send the student
+        // there rather than showing an error for something that is working.
+        if (res.success && res.reference) {
+          window.location.href = `/student/payments/checkout?ref=${encodeURIComponent(
+            res.reference,
+          )}`;
+          return;
+        }
         toast.error(res.error || "Could not open the payment page.");
       } catch {
         toast.error(
