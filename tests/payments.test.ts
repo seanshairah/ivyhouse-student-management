@@ -21,6 +21,7 @@ import {
 } from "@/core/billing/ledger";
 import { createInvoice } from "@/services/invoices";
 import { recordManualPayment } from "@/core/billing/deposits";
+import { resolveAuthEmail, friendlyPaynowError } from "@/services/payments/paynow";
 
 /**
  * End-to-end payment tests.
@@ -528,5 +529,47 @@ describe("a student with no room", () => {
     });
     expect(transport.ok).toBe(true);
     expect(transport.amount).toBe(15);
+  });
+});
+
+describe("Paynow request hygiene", () => {
+  it("never sends an undeliverable address as authemail", () => {
+    // Paynow validates this field and rejects reserved TLDs, which comes back
+    // as "The authemail field is required for remote transactions" — an error
+    // that reads as though we sent nothing at all.
+    delete process.env.PAYNOW_AUTH_EMAIL;
+    expect(resolveAuthEmail("someone@ivyhouse.test")).not.toContain(".test");
+    expect(resolveAuthEmail("someone@host.local")).not.toContain(".local");
+    expect(resolveAuthEmail("")).toContain("@");
+    expect(resolveAuthEmail(undefined)).toContain("@");
+    expect(resolveAuthEmail("not-an-email")).toContain("@");
+  });
+
+  it("uses a real payer address when there is one", () => {
+    delete process.env.PAYNOW_AUTH_EMAIL;
+    expect(resolveAuthEmail("student@gmail.com")).toBe("student@gmail.com");
+  });
+
+  it("prefers the configured merchant address, which test mode requires", () => {
+    process.env.PAYNOW_AUTH_EMAIL = "merchant@example.org";
+    expect(resolveAuthEmail("student@gmail.com")).toBe("merchant@example.org");
+    delete process.env.PAYNOW_AUTH_EMAIL;
+  });
+
+  it("does not show a student raw provider error text", () => {
+    const authemail = friendlyPaynowError(
+      "The authemail field is required for remote transactions",
+    );
+    expect(authemail).not.toContain("authemail");
+    expect(authemail).toContain("no money has left your account");
+
+    const testing = friendlyPaynowError(
+      "Black Ivy Media is currently in testing and cannot accept payments at this time",
+    );
+    expect(testing).toContain("not live yet");
+
+    // Anything unrecognised must still be rewritten, not passed through.
+    const unknown = friendlyPaynowError("SOME_INTERNAL_CODE_42");
+    expect(unknown).not.toContain("SOME_INTERNAL_CODE_42");
   });
 });

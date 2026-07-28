@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { platform } from "@/core/platform";
 
 /**
  * Paynow integration abstraction.
@@ -19,6 +20,78 @@ export function toLocalZwPhone(phone: string): string {
   if (p.startsWith("263")) p = "0" + p.slice(3);
   else if (p.startsWith("7") && p.length === 9) p = "0" + p;
   return p;
+}
+
+/**
+ * Reserved and non-routable TLDs. Paynow validates the address it is given and
+ * rejects these outright, which surfaces as "The authemail field is required
+ * for remote transactions" — an error that reads as if we sent nothing.
+ */
+const UNDELIVERABLE_TLDS = ["test", "local", "localhost", "invalid", "example"];
+
+function isDeliverableEmail(value: string | undefined | null): boolean {
+  const email = (value ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
+  const tld = email.split(".").pop() ?? "";
+  return !UNDELIVERABLE_TLDS.includes(tld);
+}
+
+/**
+ * The address Paynow is told to send its confirmation to.
+ *
+ * Paynow requires this on every remote (mobile-money) transaction and refuses
+ * anything it considers undeliverable. Two rules apply:
+ *
+ *  1. While the merchant account is in TEST mode, Paynow only accepts the
+ *     merchant's own registered email. That is what PAYNOW_AUTH_EMAIL is for —
+ *     set it to the merchant address and every test transaction uses it.
+ *  2. Otherwise use the payer's own address, so the confirmation reaches them —
+ *     but only if it is actually deliverable. A seeded or placeholder address
+ *     on a reserved TLD would be rejected and take the whole payment with it,
+ *     so fall back to the platform's contact address rather than fail.
+ */
+export function resolveAuthEmail(payerEmail?: string | null): string {
+  const configured = process.env.PAYNOW_AUTH_EMAIL?.trim();
+  if (configured) return configured;
+  if (isDeliverableEmail(payerEmail)) return payerEmail!.trim();
+  return platform().contact.email;
+}
+
+/**
+ * Turn a Paynow API error into something a student can act on.
+ *
+ * These strings were being shown to students verbatim. "The authemail field is
+ * required for remote transactions" tells a payer nothing, and worse, implies
+ * they did something wrong when the cause is our configuration or the
+ * merchant's account status.
+ */
+export function friendlyPaynowError(raw: string | undefined): string {
+  const s = (raw ?? "").toLowerCase();
+
+  if (s.includes("authemail")) {
+    return (
+      "Payments aren't set up correctly yet — the account this platform uses " +
+      "to take payments is missing its contact address. Please tell the office; " +
+      "no money has left your account."
+    );
+  }
+  if (s.includes("testing") || s.includes("cannot accept payments")) {
+    return (
+      "Online payments are not live yet — the payment provider still has this " +
+      "account in testing. Please pay at the office for now; no money has left " +
+      "your account."
+    );
+  }
+  if (s.includes("invalid") && s.includes("phone")) {
+    return "That mobile number wasn't accepted. Check it and try again.";
+  }
+  if (s.includes("insufficient")) {
+    return "There wasn't enough balance in the wallet to complete this payment.";
+  }
+  if (!raw) return "We couldn't start the payment. Please try again in a moment.";
+
+  // Unrecognised: still don't leak raw API text to a student.
+  return "We couldn't start the payment just now. Please try again, or contact the office if it keeps happening.";
 }
 
 export interface PaynowConfig {
@@ -70,7 +143,10 @@ export interface InitiatePaymentResult {
   redirectUrl?: string;
   pollUrl?: string;
   providerRef?: string;
+  /** Student-facing message. Safe to display. */
   error?: string;
+  /** Paynow's own wording, for logs and the audit trail — never shown to a student. */
+  providerError?: string;
   /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
   ambiguous?: boolean;
   mode: "development" | "live";
@@ -174,7 +250,7 @@ export async function createPaynowPayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
+      authemail: resolveAuthEmail(input.email),
       status: "Message",
     };
     values.hash = paynowHash(values, config.integrationKey);
@@ -198,7 +274,8 @@ export async function createPaynowPayment(
     return {
       ok: false,
       mode: "live",
-      error: parsed.error || parsed.status || "Paynow error",
+      error: friendlyPaynowError(parsed.error || parsed.status),
+      providerError: parsed.error || parsed.status || "Paynow error",
     };
   } catch (e) {
     // Network/timeout: the request MAY have reached Paynow. Ambiguous, not failed.
@@ -219,7 +296,10 @@ export interface InitiateMobileResult {
   pollUrl?: string;
   providerRef?: string;
   instructions?: string;
+  /** Student-facing message. Safe to display. */
   error?: string;
+  /** Paynow's own wording, for logs and the audit trail — never shown to a student. */
+  providerError?: string;
   /** True when the outcome is uncertain (network/timeout) — NOT a hard decline. */
   ambiguous?: boolean;
   mode: "development" | "live";
@@ -255,7 +335,7 @@ export async function createPaynowMobilePayment(
       additionalinfo: input.description,
       returnurl: config.returnUrl,
       resulturl: config.resultUrl,
-      authemail: process.env.PAYNOW_AUTH_EMAIL || input.email,
+      authemail: resolveAuthEmail(input.email),
       phone: toLocalZwPhone(input.phone),
       method,
       status: "Message",
@@ -283,7 +363,8 @@ export async function createPaynowMobilePayment(
     return {
       ok: false,
       mode: "live",
-      error: parsed.error || parsed.status || "Paynow declined the request.",
+      error: friendlyPaynowError(parsed.error || parsed.status),
+      providerError: parsed.error || parsed.status || "Paynow declined the request.",
     };
   } catch (e) {
     // Network/timeout: the prompt MAY have been sent. Ambiguous, not failed.

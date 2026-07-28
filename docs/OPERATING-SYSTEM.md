@@ -332,6 +332,30 @@ SELECT (SELECT COALESCE(SUM(amount),0) FROM "Payment" WHERE status = 'PAID') AS 
        (SELECT COALESCE(SUM(amount),0) FROM "PaymentAllocation")             AS allocated;
 ```
 
+### When Paynow rejects a payment
+
+Two failures look like our bug but are not:
+
+**"The authemail field is required for remote transactions"** — Paynow validates
+the address we pass as `authemail` and rejects anything undeliverable, including
+reserved TLDs like `.test` and `.local`. The wording implies we sent nothing;
+usually we sent something it refused. `resolveAuthEmail()` now guards this:
+`PAYNOW_AUTH_EMAIL` if set, else the payer's address if it is deliverable, else
+the platform contact address. **While the merchant account is in TEST mode,
+Paynow accepts only the merchant's own registered email — set
+`PAYNOW_AUTH_EMAIL` to it.**
+
+**"<Merchant> is currently in testing and cannot accept payments at this time"**
+— entirely on Paynow's side. The merchant account has not been activated for
+live payments, and no code change affects it; it needs Paynow to complete
+merchant verification. Until then every real payment attempt will fail no matter
+what we send.
+
+Neither message is ever shown to a student verbatim. `friendlyPaynowError()`
+rewrites them, because "the authemail field is required" tells a payer nothing
+and implies they did something wrong. Paynow's own wording is kept on
+`PaymentTransaction.rawStatus` for diagnosis.
+
 ### Test accounts
 
 Seeded test students are prefixed `test_` and can be removed with:

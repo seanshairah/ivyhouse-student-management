@@ -243,7 +243,11 @@ export async function createSelfPayment(opts: {
             provider: "paynow",
             pollUrl: r.pollUrl,
             providerRef: r.providerRef,
-            rawStatus: r.ok ? `${opts.method}-prompt-sent` : r.ambiguous ? "uncertain" : r.error,
+            rawStatus: r.ok
+              ? `${opts.method}-prompt-sent`
+              : r.ambiguous
+                ? "uncertain"
+                : (r.providerError ?? r.error),
           },
         },
       },
