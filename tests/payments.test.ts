@@ -21,6 +21,11 @@ import {
 } from "@/core/billing/ledger";
 import { createInvoice } from "@/services/invoices";
 import { recordManualPayment } from "@/core/billing/deposits";
+import {
+  cancelUnclearedPayment,
+  listUnclearedPayments,
+  expireStalePayments,
+} from "@/core/billing/uncleared";
 import { resolveAuthEmail, friendlyPaynowError } from "@/services/payments/paynow";
 
 /**
@@ -571,5 +576,101 @@ describe("Paynow request hygiene", () => {
     // Anything unrecognised must still be rewritten, not passed through.
     const unknown = friendlyPaynowError("SOME_INTERNAL_CODE_42");
     expect(unknown).not.toContain("SOME_INTERNAL_CODE_42");
+  });
+});
+
+describe("uncleared payment requests", () => {
+  it("cancels an in-flight request and withdraws its charge", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(120);
+
+    const r = await cancelUnclearedPayment(init.reference!);
+    expect(r.ok).toBe(true);
+
+    const stored = await prisma.payment.findUnique({
+      where: { reference: init.reference! },
+    });
+    expect(stored?.status).toBe(PaymentStatus.CANCELLED);
+    // The student no longer owes rent they abandoned paying.
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(0);
+  });
+
+  it("refuses to cancel a payment that has already been received", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    await settlePayment(init.reference!);
+
+    const r = await cancelUnclearedPayment(init.reference!);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("already been received");
+
+    // Settled money is untouched, and so is the balance it cleared.
+    const stored = await prisma.payment.findUnique({
+      where: { reference: init.reference! },
+    });
+    expect(stored?.status).toBe(PaymentStatus.PAID);
+    expect((await getStudentAccount(profileId)).rent.paid).toBe(120);
+  });
+
+  it("keeps a charge that has been part-paid", async () => {
+    const charge = await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — March",
+      amount: 120,
+    });
+    const partial = await prisma.payment.create({
+      data: {
+        reference: `PART-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 50,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.PAID,
+        paidAt: new Date(),
+      },
+    });
+    await allocatePayment(partial.id);
+
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    await cancelUnclearedPayment(init.reference!);
+
+    // The part-paid charge survives; the student still owes the remainder.
+    const kept = await prisma.charge.findUnique({ where: { id: charge.id } });
+    expect(kept?.status).toBe(ChargeStatus.OUTSTANDING);
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(70);
+  });
+
+  it("lists what is uncleared, and expires only what is old", async () => {
+    const fresh = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "web",
+    });
+    const listed = await listUnclearedPayments({ studentProfileId: profileId });
+    expect(listed.map((p) => p.reference)).toContain(fresh.reference);
+    expect(listed[0].stale).toBe(false);
+
+    // Nothing is old enough yet, so a sweep must leave it alone.
+    await expireStalePayments(60);
+    let stored = await prisma.payment.findUnique({
+      where: { reference: fresh.reference! },
+    });
+    expect(stored?.status).toBe(PaymentStatus.PENDING);
+
+    // Age it past the window and it closes.
+    await expireStalePayments(0);
+    stored = await prisma.payment.findUnique({ where: { reference: fresh.reference! } });
+    expect(stored?.status).toBe(PaymentStatus.CANCELLED);
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { CheckCircle2, Receipt } from "lucide-react";
+import { CheckCircle2, X, Trash2, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,11 @@ import {
 } from "@/components/ui/table";
 import { PAYMENT_STATUS_META } from "@/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { useRouter } from "next/navigation";
+import {
+  cancelUnclearedPaymentAction,
+  expireStalePaymentsAction,
+} from "@/app/owner/actions";
 import { markPaymentPaid } from "@/app/owner/actions";
 
 export interface PaymentRow {
@@ -43,13 +48,53 @@ export function PaymentsTable({ payments }: { payments: PaymentRow[] }) {
     [payments, status],
   );
 
+  const router = useRouter();
+
   function settle(reference: string) {
     const fd = new FormData();
     fd.set("reference", reference);
     startTransition(async () => {
-      const res = await markPaymentPaid(fd);
-      if (res.success) toast.success("Payment marked as paid");
-      else toast.error(res.error ?? "Failed");
+      try {
+        const res = await markPaymentPaid(fd);
+        if (res.success) {
+          toast.success("Payment marked as paid");
+          router.refresh();
+        } else toast.error(res.error ?? "Failed");
+      } catch {
+        toast.error("Could not update that payment. Please try again.");
+      }
+    });
+  }
+
+  /** Close out a request that was started and never completed. */
+  function cancel(reference: string) {
+    const fd = new FormData();
+    fd.set("reference", reference);
+    startTransition(async () => {
+      try {
+        const res = await cancelUnclearedPaymentAction(fd);
+        if (res.success) {
+          toast.success("Payment request cancelled");
+          router.refresh();
+        } else toast.error(res.error ?? "Could not cancel that request.");
+      } catch {
+        toast.error("Could not cancel that request. Please try again.");
+      }
+    });
+  }
+
+  /** Sweep every request too old to complete. */
+  function clearStale() {
+    startTransition(async () => {
+      try {
+        const res = await expireStalePaymentsAction();
+        if (res.success) {
+          toast.success(res.message ?? "Cleared stale payment requests");
+          router.refresh();
+        } else toast.error(res.error ?? "Could not clear stale requests.");
+      } catch {
+        toast.error("Could not clear stale requests. Please try again.");
+      }
     });
   }
 
@@ -57,6 +102,9 @@ export function PaymentsTable({ payments }: { payments: PaymentRow[] }) {
     <Card>
       <CardContent className="space-y-4 p-5">
         <div className="flex items-center justify-between">
+          <Button size="sm" variant="outline" disabled={pending} onClick={clearStale}>
+            <Trash2 className="size-4" /> Clear stale requests
+          </Button>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-auto">
             <option value="all">All statuses</option>
             {STATUSES.map((s) => (
@@ -94,9 +142,22 @@ export function PaymentsTable({ payments }: { payments: PaymentRow[] }) {
                   <TableCell className="text-muted-foreground">{formatDate(p.createdAt)}</TableCell>
                   <TableCell className="text-right">
                     {p.status === "PENDING" || p.status === "PROCESSING" ? (
-                      <Button size="sm" variant="outline" disabled={pending} onClick={() => settle(p.reference)}>
-                        <CheckCircle2 className="size-4" /> Mark paid
-                      </Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button size="sm" variant="outline" disabled={pending} onClick={() => settle(p.reference)}>
+                          <CheckCircle2 className="size-4" /> Mark paid
+                        </Button>
+                        {/* Uncleared requests pile up from abandoned checkouts
+                            and ignored prompts. Only in-flight ones can be
+                            cancelled — the action refuses settled payments. */}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={pending}
+                          onClick={() => cancel(p.reference)}
+                        >
+                          <X className="size-4" /> Cancel
+                        </Button>
+                      </div>
                     ) : p.receiptId ? (
                       <Button asChild variant="outline" size="sm">
                         <a href={`/api/documents/receipt/${p.receiptId}`} target="_blank" rel="noreferrer">

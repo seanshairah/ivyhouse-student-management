@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
+import { CancelPaymentButton } from "@/components/student/cancel-payment-button";
 import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
 import { formatCurrency, formatDate, formatDateTime, toNumber } from "@/lib/utils";
 import {
@@ -140,7 +141,12 @@ export default async function StudentHomePage() {
                 </p>
               </div>
             </div>
-            <PayButton reference={pendingPayment.reference} size="default" />
+            <div className="flex items-center gap-1">
+              <PayButton reference={pendingPayment.reference} size="default" />
+              {/* Somewhere to go other than "wait". An abandoned checkout
+                  otherwise sits here as a payment in progress indefinitely. */}
+              <CancelPaymentButton reference={pendingPayment.reference} size="default" />
+            </div>
           </CardContent>
         </Card>
       )}

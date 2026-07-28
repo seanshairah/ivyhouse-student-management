@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
+import { CancelPaymentButton } from "@/components/student/cancel-payment-button";
 import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
 import { formatCurrency, formatDate, toNumber } from "@/lib/utils";
 import {
@@ -245,7 +246,10 @@ export default async function StudentPaymentsPage() {
                     </p>
                   </div>
                 </div>
-                <PayButton reference={p.reference} size="default" />
+                <div className="flex items-center gap-1">
+                  <PayButton reference={p.reference} size="default" />
+                  <CancelPaymentButton reference={p.reference} size="default" />
+                </div>
               </div>
             ))}
           </CardContent>
@@ -363,7 +367,10 @@ export default async function StudentPaymentsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       {p.status === PaymentStatus.PENDING ? (
-                        <PayButton reference={p.reference} />
+                        <div className="flex items-center justify-end gap-1">
+                          <PayButton reference={p.reference} />
+                          <CancelPaymentButton reference={p.reference} />
+                        </div>
                       ) : p.status === PaymentStatus.PAID && p.receipt ? (
                         <Button asChild variant="outline" size="sm">
                           <a

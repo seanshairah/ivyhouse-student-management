@@ -5,6 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { audit } from "@/services/audit";
 import {
+  cancelUnclearedPayment,
+  expireStalePayments,
+} from "@/core/billing/uncleared";
+import {
   approveApplication,
   rejectApplication,
   confirmMoveIn,
@@ -28,7 +32,7 @@ import {
 } from "@prisma/client";
 import { generateReference } from "@/lib/utils";
 
-type ActionResult = { success: boolean; error?: string };
+type ActionResult = { success: boolean; error?: string; message?: string };
 
 function toList(value: FormDataEntryValue | null): string[] {
   if (!value) return [];
@@ -731,6 +735,67 @@ export async function updateSettings(
     await audit({ action: "settings.updated", entityType: "Settings" });
     revalidatePath("/owner/settings");
     return { success: true };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Cancel an uncleared payment request from the owner console.
+ *
+ * Scoped to in-flight payments only — a settled payment is refused, because
+ * making received money vanish is a refund, not a cancellation.
+ */
+export async function cancelUnclearedPaymentAction(
+  formData: FormData,
+): Promise<ActionResult> {
+  const session = await requireRole("OWNER");
+  try {
+    const reference = String(formData.get("reference") || "");
+    if (!reference) throw new Error("Missing payment reference");
+
+    const r = await cancelUnclearedPayment(reference, {
+      actorId: session.userId,
+      reason: "cancelled-by-owner",
+    });
+    if (!r.ok) return { success: false, error: r.error };
+
+    await audit({
+      userId: session.userId,
+      actorEmail: session.email,
+      action: "payment.cancelled",
+      entityType: "Payment",
+      metadata: { reference, by: "owner" },
+    });
+
+    revalidatePath("/owner/payments");
+    revalidatePath("/owner/data-quality");
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/** Close out every payment request too old to complete. */
+export async function expireStalePaymentsAction(): Promise<ActionResult> {
+  const session = await requireRole("OWNER");
+  try {
+    const count = await expireStalePayments();
+    await audit({
+      userId: session.userId,
+      actorEmail: session.email,
+      action: "payment.stale_expired",
+      metadata: { count },
+    });
+    revalidatePath("/owner/payments");
+    revalidatePath("/owner/data-quality");
+    return {
+      success: true,
+      message:
+        count === 0
+          ? "No stale payment requests to clear."
+          : `Cleared ${count} stale payment request${count === 1 ? "" : "s"}.`,
+    };
   } catch (e) {
     return { success: false, error: (e as Error).message };
   }
