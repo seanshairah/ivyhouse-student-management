@@ -82,6 +82,42 @@ function paynowHash(values: Record<string, string>, key: string): string {
   return crypto.createHash("sha512").update(concat).digest("hex").toUpperCase();
 }
 
+/**
+ * Verify the hash Paynow puts on data it sends US.
+ *
+ * We were signing our outbound requests but never checking the signature on
+ * anything coming back, so a poll response was trusted purely because it
+ * arrived over TLS. Paynow builds the hash from every field except `hash`
+ * itself, concatenated in order, with the integration key appended.
+ *
+ * Returns:
+ *   "valid"    — hash present and correct
+ *   "invalid"  — hash present and wrong: treat the payload as hostile
+ *   "absent"   — no hash field; caller decides (we log and fall back to TLS)
+ *
+ * Compared in constant time so this can't be used as a timing oracle.
+ */
+export function verifyPaynowHash(
+  payload: Record<string, string>,
+  key: string,
+): "valid" | "invalid" | "absent" {
+  const provided = payload.hash;
+  if (!provided) return "absent";
+  if (!key) return "absent";
+
+  const signed: Record<string, string> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k.toLowerCase() === "hash") continue;
+    signed[k] = v;
+  }
+
+  const expected = paynowHash(signed, key);
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided.toUpperCase(), "utf8");
+  if (a.length !== b.length) return "invalid";
+  return crypto.timingSafeEqual(a, b) ? "valid" : "invalid";
+}
+
 function toUrlEncoded(data: Record<string, string>): string {
   return Object.entries(data)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
@@ -306,6 +342,30 @@ export async function verifyPaynowPayment(
     const res = await fetch(pollUrl);
     const parsed = parsePaynowResponse(await res.text());
     const status = parsed.status || "Unknown";
+
+    // The poll response is what promotes a payment to PAID, so its signature is
+    // the one that matters most. A wrong hash means the body did not come from
+    // Paynow — refuse to act on it rather than settling on a forged "Paid".
+    const signature = verifyPaynowHash(parsed, config.integrationKey);
+    if (signature === "invalid") {
+      console.error("[paynow] poll response failed hash verification", {
+        pollUrl,
+        status,
+      });
+      return {
+        paid: false,
+        status: "Signature verification failed",
+        outcome: "pending",
+        raw: parsed,
+      };
+    }
+    if (signature === "absent") {
+      // Paynow normally signs poll responses. Missing means an unexpected
+      // payload shape, so note it — but TLS still authenticated the origin, and
+      // failing hard here would strand real payments.
+      console.warn("[paynow] poll response carried no hash", { pollUrl, status });
+    }
+
     const outcome = classifyPaynowStatus(status);
     return { paid: outcome === "paid", status, outcome, raw: parsed };
   } catch (e) {

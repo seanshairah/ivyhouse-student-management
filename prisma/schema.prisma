@@ -176,6 +176,7 @@ model User {
   auditLogs      AuditLog[]
   sentMessages   MessageLog[]    @relation("MessageSender")
   notifications  Notification[]
+  passwordResets PasswordResetToken[]
 }
 
 model House {
@@ -606,6 +607,39 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([entityType, entityId])
+}
+
+/// A single-use password reset grant.
+///
+/// Only the SHA-256 of the token is stored, so a database leak does not hand
+/// over working reset links. The raw token exists solely in the emailed URL.
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 hex of the token that was emailed.
+  tokenHash String   @unique
+  expiresAt DateTime
+  /// Set the moment it is redeemed, so a link cannot be replayed.
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Sliding-window counter for rate limiting.
+///
+/// Kept in the database rather than in memory because both platforms deploy to
+/// serverless, where each request may land on a fresh instance — an in-process
+/// counter would reset constantly and enforce nothing.
+model RateLimit {
+  id        String   @id @default(cuid())
+  /// Bucket key, e.g. "login:someone@example.com" or "pay:<profileId>".
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([key, createdAt])
 }
 
 model Settings {

@@ -71,6 +71,7 @@ business's students under the other's brand.
 ```
 src/core/platform/     platform config types + env and database guards
 src/core/billing/      the ledger and pricing — all money logic
+src/core/auth/         record-level access control, rate limiting, password reset
 src/services/payments/ Paynow integration and settlement
 src/services/invoices/ invoice documents and balance access
 src/services/reports/  owner reporting
@@ -208,6 +209,12 @@ fires three times produces exactly one allocation and one receipt.
 5. **Mock mode cannot run in production.** In development `verifyPaynowPayment()`
    reports every payment as paid; `getPaynowConfig()` throws in production if the
    Paynow credentials are missing rather than silently falling back to it.
+6. **Inbound Paynow data is signature-checked.** We signed our outbound requests
+   but never verified anything coming back. `verifyPaynowHash()` now checks the
+   SHA-512 Paynow puts on the poll response — the payload that actually promotes
+   a payment to `PAID` — using a constant-time comparison. A wrong hash is
+   treated as hostile and refused; a missing one is logged and falls back to TLS,
+   so an unexpected payload shape can't strand real payments.
 
 ---
 
@@ -309,6 +316,65 @@ ALTER TABLE "StudentProfile" RENAME COLUMN "transportOptIn" TO "usesTransport";
 Then redeploy the previous build. To roll back fully, restore the snapshot.
 
 ---
+
+## 6a. Access control
+
+Authentication answers *who are you*. Authorisation answers *may you touch this
+record* — and that second check was missing on anything that took an id from the
+client. Any signed-in student could read any other student's invoice, receipt or
+account statement by changing the id in the URL.
+
+`src/core/auth/access.ts` is now the single place that decides:
+
+| Helper | Question |
+|---|---|
+| `canAccessStudent` | may this actor see this student's records? |
+| `canAccessInvoice` | …this invoice? |
+| `canAccessReceipt` | …this receipt? |
+| `canAccessPayment` | …act on this payment? |
+
+Staff (`OWNER`, `CARETAKER`) may reach any record **in their own database** —
+safe precisely because each platform has its own, so there is no other
+business's data present to reach. Students get their own records only.
+
+Denials return **404, not 403**, so the endpoints can't be used to probe which
+ids exist.
+
+### Rate limiting
+
+`src/core/auth/rate-limit.ts` — a sliding window kept in the database, because
+both platforms run on serverless where an in-process counter spans one warm
+instance at best and an attacker spreading guesses across cold starts never
+hits it.
+
+| Bucket | Limit |
+|---|---|
+| `login:<email>` | 8 per 15 min, cleared on success |
+| `reset:<email>` | 3 per 15 min |
+| `pay:<profileId>` | 12 per 10 min |
+
+It fails **open**: if the table is unreachable, requests are allowed. Rate
+limiting is a mitigation, not the security boundary — authentication and
+authorisation are, and those fail closed.
+
+Login also always runs a bcrypt comparison, against a dummy hash when the email
+isn't registered, so an unknown account takes the same time as a wrong password.
+
+### Password recovery
+
+`src/core/auth/password-reset.ts`. Previously there was none — a student who
+forgot their password had to ask an administrator to reset it by hand.
+
+- Only the SHA-256 of the token is stored; a database leak yields hashes, not
+  working links.
+- Single-use and one hour long. Requesting a new link invalidates the old one.
+- Redeeming claims the token with a compare-and-set inside the same transaction
+  that writes the password, so two concurrent submissions can't both succeed.
+- The response is identical whether or not the email is registered — otherwise
+  the form becomes a way to enumerate the student roll.
+- Redeeming clears `mustChangePassword`: they have just chosen a password.
+- Success does **not** sign the user in. Possession of an emailed link
+  shouldn't hand out a session.
 
 ## 7. Roles
 

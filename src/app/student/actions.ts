@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { createSelfPayment, pollAndSettle } from "@/services/payments";
 import { isPaymentPurpose, type PaymentPurpose } from "@/core/billing/pricing";
+import { canAccessPayment } from "@/core/auth/access";
+import { rateLimit, PAYMENT_LIMIT } from "@/core/auth/rate-limit";
 import { requestRenewal } from "@/services/applications";
 import { notifyOwners } from "@/services/notifications";
 import { generateReference } from "@/lib/utils";
@@ -39,22 +41,15 @@ async function getProfile(userId: string) {
 
 /**
  * Verify a payment reference belongs to the signed-in student before we act on
- * it. Without this, a student could poll/settle another student's payment by
- * reference. Settlement always credits the payment's own owner, but this keeps
- * one student from touching another's payment at all.
+ * it, so one student can never poll or settle another's payment. Delegates to
+ * the shared access module so every ownership rule lives in one place.
  */
 async function assertOwnsPayment(
   userId: string,
   reference: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const payment = await prisma.payment.findUnique({
-    where: { reference },
-    select: { studentProfile: { select: { userId: true } } },
-  });
-  if (!payment) return { ok: false, error: "Payment not found" };
-  if (payment.studentProfile.userId !== userId) {
-    return { ok: false, error: "This payment isn't on your account." };
-  }
+  const allowed = await canAccessPayment({ userId, role: "STUDENT" }, reference);
+  if (!allowed) return { ok: false, error: "This payment isn't on your account." };
   return { ok: true };
 }
 
@@ -141,6 +136,17 @@ export async function initiateSelfPaymentAction(input: {
     // The client picks WHAT to pay for; the server decides how much that costs.
     if (!isPaymentPurpose(input.purpose)) {
       return { success: false, error: "Invalid payment type" };
+    }
+
+    // Every initiation round-trips to Paynow, so cap the rate. The duplicate
+    // guard in createSelfPayment already collapses rapid identical attempts;
+    // this stops a loop churning through distinct ones.
+    const gate = await rateLimit({ key: `pay:${profile.id}`, ...PAYMENT_LIMIT });
+    if (!gate.allowed) {
+      return {
+        success: false,
+        error: "Too many payment attempts. Please wait a few minutes and try again.",
+      };
     }
     const r = await createSelfPayment({
       profileId: profile.id,
