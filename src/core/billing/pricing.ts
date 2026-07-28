@@ -9,6 +9,17 @@ import { platform } from "@/core/platform";
  * student self-service payments and administrator-raised charges.
  */
 
+/**
+ * The one currency this platform prices, collects and receipts in.
+ *
+ * Zimbabwe runs two currencies side by side, so "$" on its own is ambiguous.
+ * Everything here is US dollars. Which account the money actually lands in is
+ * decided by the Paynow integration rather than by anything sent on the wire —
+ * see PAYNOW_CURRENCY in `src/services/payments/paynow.ts`, which refuses to
+ * run against a configuration claiming anything else.
+ */
+export const CURRENCY = "USD" as const;
+
 /** What a student can choose to pay for from the portal. */
 export type PaymentPurpose = "RENT_MONTH" | "RENT_SEMESTER" | "TRANSPORT_MONTH";
 

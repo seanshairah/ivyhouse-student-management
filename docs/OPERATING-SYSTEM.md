@@ -165,25 +165,69 @@ fires three times produces exactly one allocation and one receipt.
         ▼
   createSelfPayment()
     ├─ prices the purpose server-side from the room tier + platform config
-    ├─ reuses any identical payment started in the last 90s (double-click guard)
-    ├─ raises the Charge  ← the debt exists before the money is asked for
+    ├─ continues any identical payment started in the last 90s, making it
+    │  usable for the method asked for (double-click / switched-method guard)
+    ├─ writes the Payment, then raises the Charge against it
+    │     ← the debt exists before the money is asked for, and knows which
+    │       attempt raised it, so it can be withdrawn again exactly
     └─ initiates with Paynow (EcoCash / OneMoney prompt, or hosted checkout)
         │
         ▼
   PENDING ──────────────────────────────────────┐
         │                                       │
    Paynow confirms                        student cancels
-        │                                    / declines
+        │                                    / declines / walks away
         ▼                                       ▼
   settlePayment()  (one transaction)         FAILED / CANCELLED
-    ├─ status → PAID
-    ├─ receipt issued
+    ├─ status → PAID                            └─ the Charge raised for it
+    ├─ receipt issued                              is WITHDRAWN
     └─ allocatePayment() → balance moves
         │
         ▼
      PAID ──── provider reverses ────► REFUNDED
                                         └─ charges return to OUTSTANDING
 ```
+
+### The charge follows the payment, in both directions
+
+A self-service charge is raised *before* the money is taken, because the ledger
+needs something to allocate against when it arrives. The corollary is that a
+payment which never produces money has to take its charge back off the account.
+It did not, and abandoned checkouts silently became real debt: a test student's
+rent balance climbed from $240 to $600 across three closed tabs.
+
+`Charge.originPaymentId` is what makes the withdrawal exact — the alternative,
+matching on category and recency, could just as easily withdraw a charge the
+office raised minutes earlier. Every path a dying payment can take now goes
+through `withdrawChargesForPayment()`: hard decline at initiation, the state
+machine moving to `FAILED`/`CANCELLED`, an explicit cancellation, and the daily
+sweep. Charges stranded by payments that died *before* any of this existed are
+picked up by `withdrawStrandedCharges()`.
+
+Two rules bound all of it: only charges linked to that specific payment, and
+only charges nothing has been allocated against. A part-paid debt always
+survives, so money already received never loses the charge it sits against.
+
+### Reconcile before writing anything off
+
+`reconcileAndExpirePayments()` runs from the daily cron. It asks Paynow about
+every in-flight payment old enough to be finished, and only then closes what is
+genuinely dead.
+
+The order is not cosmetic. Once closing a request also withdraws its charge,
+cancelling a payment the provider actually collected erases the money and the
+record of it in one stroke. That case is real: a payment sitting `PENDING` in
+production was reported `Paid` by Paynow, its webhook having never arrived. So:
+
+- reached a provider → poll first; settle if paid, close only if Paynow says it
+  was not;
+- could not reach the provider, or the response failed its signature check →
+  **leave it alone**. `VerifyResult.reachable` exists precisely so a caller
+  about to write money off can tell "not paid" from "could not ask".
+- never reached a provider at all → nothing to ask; close it.
+
+`expireStalePayments()` in the ledger deliberately refuses to touch anything
+carrying a real poll URL, so the unsafe path no longer exists to be called.
 
 ### Rules that are enforced in code, not by convention
 
@@ -215,6 +259,15 @@ fires three times produces exactly one allocation and one receipt.
    a payment to `PAID` — using a constant-time comparison. A wrong hash is
    treated as hostile and refused; a missing one is logged and falls back to TLS,
    so an unexpected payload shape can't strand real payments.
+7. **Money is collected strictly in USD.** Paynow takes no currency on the wire —
+   an integration *is* a currency, bound to one merchant account, so the
+   integration ID we sign with decides which account is credited. There is
+   nothing to send and nothing to negotiate; the only useful guarantee is that
+   `getPaynowConfig()` throws rather than run under a `PAYNOW_CURRENCY` claiming
+   anything else. Set `PAYNOW_USD_INTEGRATION_ID` / `_KEY` to the USD
+   integration; the owner's currency setting is fixed and no longer editable,
+   because a value typed there could only mislabel documents for payments still
+   going to the USD account.
 
 ---
 

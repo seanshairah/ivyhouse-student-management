@@ -17,6 +17,7 @@ export {
   priceFor,
   isPaymentPurpose,
   PAYMENT_PURPOSES,
+  CURRENCY,
   type PaymentPurpose,
 } from "@/core/billing/pricing";
 

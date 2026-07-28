@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { platform } from "@/core/platform";
+import { CURRENCY } from "@/core/billing/pricing";
 
 /**
  * Paynow integration abstraction.
@@ -77,9 +78,20 @@ function authEmailFallback(payerEmail: string | null | undefined, used: string):
   return null;
 }
 
-/** Did Paynow reject us specifically over the authemail field? */
+/**
+ * Did Paynow reject us over the authemail field, in a way a different address
+ * could actually fix?
+ *
+ * In test mode Paynow requires the merchant's OWN registered address and says
+ * so. Retrying with the payer's address cannot satisfy that, so a retry is a
+ * wasted round-trip — the only fix is setting PAYNOW_AUTH_EMAIL correctly, or
+ * the merchant account leaving test mode.
+ */
 function isAuthEmailRejection(raw: string | undefined): boolean {
-  return /authemail/i.test(raw ?? "");
+  const s = (raw ?? "").toLowerCase();
+  if (!s.includes("authemail")) return false;
+  if (s.includes("test mode") || s.includes("must match")) return false;
+  return true;
 }
 
 /**
@@ -93,11 +105,20 @@ function isAuthEmailRejection(raw: string | undefined): boolean {
 export function friendlyPaynowError(raw: string | undefined): string {
   const s = (raw ?? "").toLowerCase();
 
+  // Test mode: Paynow accepts only the merchant's own registered address, and
+  // says so explicitly. This is configuration, not something the payer did.
+  if (s.includes("test mode") || (s.includes("authemail") && s.includes("match"))) {
+    return (
+      "Online payments are still in test mode with the payment provider, so " +
+      "this can't be completed yet. Please pay at the office for now; no money " +
+      "has left your account."
+    );
+  }
   if (s.includes("authemail")) {
     return (
-      "Payments aren't set up correctly yet — the account this platform uses " +
-      "to take payments is missing its contact address. Please tell the office; " +
-      "no money has left your account."
+      "Payments aren't set up correctly yet — the address this platform gives " +
+      "the payment provider isn't accepted. Please tell the office; no money " +
+      "has left your account."
     );
   }
   if (s.includes("testing") || s.includes("cannot accept payments")) {
@@ -119,18 +140,56 @@ export function friendlyPaynowError(raw: string | undefined): string {
   return "We couldn't start the payment just now. Please try again, or contact the office if it keeps happening.";
 }
 
+/**
+ * The only currency this platform bills, collects or reports in.
+ *
+ * Paynow does not take a currency on the wire — an integration IS a currency.
+ * Each one is bound to a single merchant account, so which account the money
+ * lands in is decided entirely by the integration ID we sign the request with.
+ * Point PAYNOW_INTEGRATION_ID at a ZWG integration and every payment quietly
+ * settles into a ZWG account while the whole interface still says "$".
+ *
+ * There is therefore nothing to send and nothing to negotiate; the only useful
+ * guarantee is that the platform refuses to run against anything else. Rent and
+ * transport are priced in USD, receipts are issued in USD, and the integration
+ * has to be the USD one.
+ */
+export const PAYNOW_CURRENCY = CURRENCY;
+
 export interface PaynowConfig {
   integrationId: string;
   integrationKey: string;
   returnUrl: string;
   resultUrl: string;
   mode: "development" | "live";
+  /** Always "USD". Present so callers can label amounts from the config. */
+  currency: typeof PAYNOW_CURRENCY;
 }
 
 export function getPaynowConfig(): PaynowConfig {
-  const integrationId = process.env.PAYNOW_INTEGRATION_ID || "";
-  const integrationKey = process.env.PAYNOW_INTEGRATION_KEY || "";
+  // A currency-specific pair wins, so the USD integration can be set
+  // explicitly and be obviously the USD one to whoever reads the environment
+  // next. The generic names stay supported for existing deployments.
+  const integrationId =
+    process.env.PAYNOW_USD_INTEGRATION_ID || process.env.PAYNOW_INTEGRATION_ID || "";
+  const integrationKey =
+    process.env.PAYNOW_USD_INTEGRATION_KEY || process.env.PAYNOW_INTEGRATION_KEY || "";
   const hasCredentials = Boolean(integrationId && integrationKey);
+
+  // Fail closed on a currency this platform does not price in. Changing this
+  // variable cannot change where the money goes — only the integration can do
+  // that — so a value other than USD means the environment believes something
+  // that isn't true, and the honest response is to stop rather than to take
+  // payments under it.
+  const requested = (process.env.PAYNOW_CURRENCY || PAYNOW_CURRENCY).trim().toUpperCase();
+  if (requested !== PAYNOW_CURRENCY) {
+    throw new Error(
+      `PAYNOW_CURRENCY is set to "${requested}". This platform prices, collects ` +
+        `and receipts strictly in ${PAYNOW_CURRENCY}. Point PAYNOW_USD_INTEGRATION_ID / ` +
+        `PAYNOW_USD_INTEGRATION_KEY at the USD integration in your Paynow ` +
+        `dashboard — the integration is what selects the receiving account.`,
+    );
+  }
 
   // Fail closed in production.
   //
@@ -153,6 +212,7 @@ export function getPaynowConfig(): PaynowConfig {
     returnUrl: process.env.PAYNOW_RETURN_URL || "http://localhost:3000/student/payments/return",
     resultUrl: process.env.PAYNOW_RESULT_URL || "http://localhost:3000/api/payments/paynow/result",
     mode: process.env.PAYNOW_MODE === "live" && hasCredentials ? "live" : "development",
+    currency: PAYNOW_CURRENCY,
   };
 }
 
@@ -459,6 +519,17 @@ export interface VerifyResult {
   status: string;
   outcome: PaynowOutcome;
   raw?: Record<string, string>;
+  /**
+   * Did Paynow actually answer, with something we could trust?
+   *
+   * A network failure and a genuine "not paid yet" both come back as
+   * `outcome: "pending"`, which is the right call for a student watching a
+   * spinner — but not for anything that writes a payment off. Cancelling a
+   * payment because we could not reach Paynow would discard money that has in
+   * fact been collected, so a caller about to do that must be able to tell the
+   * two apart.
+   */
+  reachable: boolean;
 }
 
 /** Poll Paynow (or simulate) to verify payment status. */
@@ -467,12 +538,12 @@ export async function verifyPaynowPayment(
 ): Promise<VerifyResult> {
   const config = getPaynowConfig();
   if (config.mode === "development") {
-    return { paid: true, status: "Paid", outcome: "paid" };
+    return { paid: true, status: "Paid", outcome: "paid", reachable: true };
   }
   // A mock/empty poll URL in LIVE mode cannot be verified against Paynow —
   // never treat it as paid, or we'd settle a payment nobody actually made.
   if (!pollUrl || pollUrl.startsWith("mock://")) {
-    return { paid: false, status: "Unverifiable", outcome: "pending" };
+    return { paid: false, status: "Unverifiable", outcome: "pending", reachable: false };
   }
   try {
     const res = await fetch(pollUrl);
@@ -493,6 +564,8 @@ export async function verifyPaynowPayment(
         status: "Signature verification failed",
         outcome: "pending",
         raw: parsed,
+        // Unsigned or wrongly signed: we have no trustworthy answer at all.
+        reachable: false,
       };
     }
     if (signature === "absent") {
@@ -503,9 +576,14 @@ export async function verifyPaynowPayment(
     }
 
     const outcome = classifyPaynowStatus(status);
-    return { paid: outcome === "paid", status, outcome, raw: parsed };
+    return { paid: outcome === "paid", status, outcome, raw: parsed, reachable: true };
   } catch (e) {
-    return { paid: false, status: `Error: ${(e as Error).message}`, outcome: "pending" };
+    return {
+      paid: false,
+      status: `Error: ${(e as Error).message}`,
+      outcome: "pending",
+      reachable: false,
+    };
   }
 }
 

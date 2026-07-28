@@ -12,6 +12,7 @@ import {
   pollAndSettle,
   failPayment,
   canTransition,
+  reconcileAndExpirePayments,
 } from "@/services/payments";
 import {
   getStudentAccount,
@@ -26,7 +27,12 @@ import {
   listUnclearedPayments,
   expireStalePayments,
 } from "@/core/billing/uncleared";
-import { resolveAuthEmail, friendlyPaynowError } from "@/services/payments/paynow";
+import {
+  resolveAuthEmail,
+  friendlyPaynowError,
+  getPaynowConfig,
+  PAYNOW_CURRENCY,
+} from "@/services/payments/paynow";
 
 /**
  * End-to-end payment tests.
@@ -296,9 +302,11 @@ describe("payment state machine", () => {
     const stored = await prisma.payment.findUnique({ where: { reference: init.reference! } });
     expect(stored?.status).toBe(PaymentStatus.FAILED);
 
-    // The charge stands — the student still owes the rent they tried to pay.
+    // The charge goes with it. A student who started a payment and never
+    // completed it has agreed to nothing, so billing them for it is wrong —
+    // and repeated attempts stacked up as real debt on a real account.
     const account = await getStudentAccount(profileId);
-    expect(account.rent.outstanding).toBe(120);
+    expect(account.rent.outstanding).toBe(0);
   });
 });
 
@@ -672,6 +680,286 @@ describe("uncleared payment requests", () => {
     await expireStalePayments(0);
     stored = await prisma.payment.findUnique({ where: { reference: fresh.reference! } });
     expect(stored?.status).toBe(PaymentStatus.CANCELLED);
+  });
+});
+
+describe("Paynow test-mode rejection is reported honestly", () => {
+  const TEST_MODE_ERROR =
+    "The integration ID is in test mode, so if authemail is specified then it " +
+    "must match the merchants registered email address (c*******b@i*****.com)";
+
+  it("tells the student it is a provider setup issue, not their mistake", () => {
+    const msg = friendlyPaynowError(TEST_MODE_ERROR);
+    expect(msg).toContain("test mode");
+    expect(msg).toContain("no money has left your account");
+    // Never leak the provider's wording, including the masked merchant address.
+    expect(msg).not.toContain("authemail");
+    expect(msg).not.toContain("@");
+  });
+});
+
+describe("an abandoned checkout must not leave a debt behind", () => {
+  // The production incident this covers: a test student's rent balance climbed
+  // from $240 to $600 because three checkouts were opened and closed. Each one
+  // had raised its charge up front, and nothing ever took them back off.
+
+  it("withdraws the charge when a payment is expired by the sweep", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(120);
+
+    await expireStalePayments(0);
+
+    const stored = await prisma.payment.findUnique({
+      where: { reference: init.reference! },
+    });
+    expect(stored?.status).toBe(PaymentStatus.CANCELLED);
+    // The whole point: expiring the request has to expire the debt with it.
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(0);
+  });
+
+  it("withdraws the charge when the payment fails", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "web",
+    });
+    expect((await getStudentAccount(profileId)).transport.outstanding).toBeGreaterThan(0);
+
+    // A student declining the prompt on their phone lands here.
+    await failPayment(init.reference!, "declined-by-payer");
+
+    expect((await getStudentAccount(profileId)).transport.outstanding).toBe(0);
+  });
+
+  it("cancels a payment that never reached the provider", async () => {
+    // Recorded by the office, or abandoned before Paynow was contacted: there
+    // is no provider transaction row, and a nested update against a missing
+    // one throws — which silently aborted the whole sweep.
+    const bare = await prisma.payment.create({
+      data: {
+        reference: `BARE-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 120,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.PENDING,
+      },
+    });
+
+    const r = await cancelUnclearedPayment(bare.reference);
+    expect(r.ok).toBe(true);
+    const stored = await prisma.payment.findUnique({ where: { id: bare.id } });
+    expect(stored?.status).toBe(PaymentStatus.CANCELLED);
+  });
+
+  it("withdraws only the charge that attempt raised", async () => {
+    // A charge the office raised separately must survive an unrelated
+    // abandoned checkout — the old category-and-recency match would have taken
+    // it too.
+    const officeCharge = await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — arrears agreed with the office",
+      amount: 120,
+    });
+
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    await cancelUnclearedPayment(init.reference!);
+
+    const kept = await prisma.charge.findUnique({ where: { id: officeCharge.id } });
+    expect(kept?.status).toBe(ChargeStatus.OUTSTANDING);
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(120);
+  });
+
+  it("does not raise a second charge when the student tries again", async () => {
+    const first = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    const second = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+
+    // Same attempt continued, not a new one.
+    expect(second.reference).toBe(first.reference);
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(120);
+    expect(
+      await prisma.charge.count({
+        where: { studentProfileId: profileId, status: ChargeStatus.OUTSTANDING },
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("the sweep asks the provider before writing anything off", () => {
+  // Found in production: a payment sitting PENDING here that Paynow reported
+  // as Paid, its webhook having never arrived. The sweep used to cancel stale
+  // payments without asking anyone — which became dangerous the moment closing
+  // a request also withdrew its charge, because that erases the money and the
+  // record of it in the same stroke.
+
+  it("settles a stale payment the provider has already collected", async () => {
+    const init = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    // Give it a real-looking poll URL, so the sweep treats it as something that
+    // reached a provider and has to be asked about rather than written off.
+    // Mock mode then reports "paid", standing in for Paynow's answer.
+    await prisma.paymentTransaction.updateMany({
+      where: { payment: { reference: init.reference! } },
+      data: { pollUrl: "https://www.paynow.co.zw/Interface/CheckPayment/?guid=x" },
+    });
+
+    const sweep = await reconcileAndExpirePayments(0);
+    expect(sweep.settled).toBeGreaterThanOrEqual(1);
+
+    const stored = await prisma.payment.findUnique({
+      where: { reference: init.reference! },
+      include: { receipt: true },
+    });
+    expect(stored?.status).toBe(PaymentStatus.PAID);
+    // Settled means receipted and applied, not merely marked.
+    expect(stored?.receipt).toBeTruthy();
+    expect((await getStudentAccount(profileId)).rent.paid).toBe(120);
+  });
+
+  it("withdraws a charge stranded by a payment that died long ago", async () => {
+    // The Blessbri case: a checkout cancelled five days earlier, its rent
+    // charge still sitting on the student's account. The payment is terminal,
+    // so nothing in the normal flow will ever look at it again.
+    const dead = await prisma.payment.create({
+      data: {
+        reference: `STRANDED-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 120,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.CANCELLED,
+      },
+    });
+    const stranded = await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — next month",
+      amount: 120,
+      originPaymentId: dead.id,
+    });
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(120);
+
+    const sweep = await reconcileAndExpirePayments(0);
+    expect(sweep.withdrawn).toBeGreaterThanOrEqual(1);
+
+    const after = await prisma.charge.findUnique({ where: { id: stranded.id } });
+    expect(after?.status).toBe(ChargeStatus.CANCELLED);
+    expect((await getStudentAccount(profileId)).rent.outstanding).toBe(0);
+  });
+
+  it("never cancels a payment that reached a provider without reconciling it", async () => {
+    // A poll URL we cannot verify: the answer is unknown, so the safe action is
+    // to do nothing at all rather than guess.
+    const payment = await prisma.payment.create({
+      data: {
+        reference: `UNREACHABLE-${Date.now()}`,
+        studentProfileId: profileId,
+        amount: 120,
+        category: ChargeCategory.RENT,
+        status: PaymentStatus.PENDING,
+        transaction: {
+          create: {
+            provider: "paynow",
+            pollUrl: "https://www.paynow.co.zw/Interface/CheckPayment/?guid=unknown",
+          },
+        },
+      },
+    });
+
+    await expireStalePayments(0);
+
+    const stored = await prisma.payment.findUnique({ where: { id: payment.id } });
+    expect(stored?.status).toBe(PaymentStatus.PENDING);
+  });
+});
+
+describe("switching payment method must not error before it works", () => {
+  it("gives 'pay online' a link even when the attempt began as a phone prompt", async () => {
+    // A payment started as an EcoCash prompt has no browser link. The duplicate
+    // guard used to hand that back as a success with nowhere to go, so pressing
+    // "Pay online" flashed "Could not open the payment page" and only worked on
+    // the retry. Continuing the attempt has to produce a usable link.
+    const prompt = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "ecocash",
+      phone: "0771234567",
+    });
+    expect(prompt.ok).toBe(true);
+    expect(prompt.redirectUrl).toBeUndefined();
+
+    const web = await createSelfPayment({
+      profileId,
+      purpose: "RENT_MONTH",
+      method: "web",
+    });
+    expect(web.ok).toBe(true);
+    expect(web.reference).toBe(prompt.reference);
+    expect(web.redirectUrl).toBeTruthy();
+  });
+
+  it("never reports success without something to act on", async () => {
+    for (const method of ["web", "ecocash"] as const) {
+      const r = await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method,
+        phone: "0771234567",
+      });
+      if (!r.ok) continue;
+      // ok means the student can do something next: follow a link, or approve
+      // a prompt we can poll.
+      expect(Boolean(r.redirectUrl || r.pollUrl)).toBe(true);
+    }
+  });
+});
+
+describe("money is collected strictly in USD", () => {
+  it("reports USD on the config every caller reads", () => {
+    expect(getPaynowConfig().currency).toBe("USD");
+    expect(PAYNOW_CURRENCY).toBe("USD");
+  });
+
+  it("refuses to run against any other currency", () => {
+    // Paynow takes no currency on the wire — the integration decides which
+    // account is credited. A configuration claiming otherwise is wrong, and
+    // running under it would take real money into the wrong account.
+    process.env.PAYNOW_CURRENCY = "ZWG";
+    try {
+      expect(() => getPaynowConfig()).toThrow(/strictly in USD/i);
+    } finally {
+      delete process.env.PAYNOW_CURRENCY;
+    }
+    expect(getPaynowConfig().currency).toBe("USD");
+  });
+
+  it("prefers the USD-specific integration when one is configured", () => {
+    process.env.PAYNOW_USD_INTEGRATION_ID = "usd-integration";
+    process.env.PAYNOW_USD_INTEGRATION_KEY = "usd-key";
+    try {
+      expect(getPaynowConfig().integrationId).toBe("usd-integration");
+    } finally {
+      delete process.env.PAYNOW_USD_INTEGRATION_ID;
+      delete process.env.PAYNOW_USD_INTEGRATION_KEY;
+    }
   });
 });
 

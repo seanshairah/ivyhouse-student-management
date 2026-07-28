@@ -4,16 +4,18 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/session";
 import { audit } from "@/services/audit";
-import {
-  cancelUnclearedPayment,
-  expireStalePayments,
-} from "@/core/billing/uncleared";
+import { cancelUnclearedPayment } from "@/core/billing/uncleared";
 import {
   approveApplication,
   rejectApplication,
   confirmMoveIn,
 } from "@/services/applications";
-import { settlePayment, generatePaymentLink } from "@/services/payments";
+import {
+  settlePayment,
+  generatePaymentLink,
+  reconcileAndExpirePayments,
+} from "@/services/payments";
+import { CURRENCY } from "@/core/billing/pricing";
 import { createInvoice } from "@/services/invoices";
 import {
   resolveRecipients,
@@ -720,7 +722,10 @@ export async function updateSettings(
       ownerName: String(formData.get("ownerName") || "House Owner"),
       ownerEmail: String(formData.get("ownerEmail") || ""),
       ownerPhone: String(formData.get("ownerPhone") || "") || null,
-      currency: String(formData.get("currency") || "USD"),
+      // Not taken from the form. Which account money lands in is decided by
+      // the Paynow integration, so a currency typed here could only ever
+      // mislabel invoices and receipts for payments still going to USD.
+      currency: CURRENCY,
       invoicePrefix: String(formData.get("invoicePrefix") || "INV"),
       receiptPrefix: String(formData.get("receiptPrefix") || "RCT"),
       statementPrefix: String(formData.get("statementPrefix") || "STM"),
@@ -776,25 +781,50 @@ export async function cancelUnclearedPaymentAction(
   }
 }
 
-/** Close out every payment request too old to complete. */
+/**
+ * Reconcile every in-flight payment against Paynow, then close out what is
+ * genuinely dead.
+ *
+ * Reported honestly rather than as a single "cleared N": one of these three
+ * numbers is money that arrived and was never receipted, and the owner should
+ * see that it happened. Anything unresolved was left alone on purpose — we
+ * could not get a trustworthy answer, and writing a payment off on a failed
+ * lookup is how real money disappears.
+ */
 export async function expireStalePaymentsAction(): Promise<ActionResult> {
   const session = await requireRole("OWNER");
   try {
-    const count = await expireStalePayments();
+    const sweep = await reconcileAndExpirePayments();
     await audit({
       userId: session.userId,
       actorEmail: session.email,
       action: "payment.stale_expired",
-      metadata: { count },
+      metadata: { ...sweep },
     });
     revalidatePath("/owner/payments");
     revalidatePath("/owner/data-quality");
+
+    const parts: string[] = [];
+    if (sweep.settled)
+      parts.push(
+        `settled ${sweep.settled} payment${sweep.settled === 1 ? "" : "s"} Paynow had already collected`,
+      );
+    if (sweep.closed)
+      parts.push(`cleared ${sweep.closed} abandoned request${sweep.closed === 1 ? "" : "s"}`);
+    if (sweep.withdrawn)
+      parts.push(
+        `withdrew ${sweep.withdrawn} charge${sweep.withdrawn === 1 ? "" : "s"} left behind by an abandoned request`,
+      );
+    if (sweep.unresolved)
+      parts.push(
+        `left ${sweep.unresolved} alone — Paynow couldn't be reached about ${sweep.unresolved === 1 ? "it" : "them"}`,
+      );
+
     return {
       success: true,
-      message:
-        count === 0
-          ? "No stale payment requests to clear."
-          : `Cleared ${count} stale payment request${count === 1 ? "" : "s"}.`,
+      message: parts.length
+        ? `${parts.join("; ")}.`.replace(/^./, (c) => c.toUpperCase())
+        : "No payment requests needed clearing.",
     };
   } catch (e) {
     return { success: false, error: (e as Error).message };
