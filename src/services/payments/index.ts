@@ -14,8 +14,12 @@ import {
   createPaynowMobilePayment,
   verifyPaynowPayment,
   getPaynowConfig,
+  checkMobileNumber,
+  maskPhone,
+  phoneBucket,
   type MobileMethod,
 } from "./paynow";
+import { rateLimit, PROMPT_DESTINATION_LIMIT } from "@/core/auth/rate-limit";
 import {
   monthlyRentFor,
   priceFor,
@@ -304,6 +308,20 @@ function isUsableCheckoutLink(link: string | null | undefined): boolean {
   return link.includes("paynow.co.zw");
 }
 
+/**
+ * Was this attempt a mobile-money prompt at all?
+ *
+ * Distinct from hasLiveMobilePrompt below, which additionally asks whether the
+ * prompt is still outstanding. This one only asks what KIND of payment it was,
+ * so it stays true after the attempt is over — which is exactly when it is
+ * needed, to explain what "Cancelled" meant.
+ */
+function wasMobilePrompt(
+  transaction: { rawStatus: string | null } | null,
+): boolean {
+  return /prompt-sent/.test(transaction?.rawStatus ?? "");
+}
+
 /** Is there a mobile-money prompt already sitting on the payer's phone? */
 function hasLiveMobilePrompt(
   transaction: { pollUrl: string | null; rawStatus: string | null } | null,
@@ -383,13 +401,40 @@ async function startMobileCheckout(
   t: CheckoutTarget & { method: MobileMethod; phone?: string },
 ): Promise<SelfPaymentResult> {
   const phone = (t.phone || "").trim();
-  if (phone.replace(/[^\d]/g, "").length < 9) {
+  // Checked before anything is sent: a number on the wrong network can never
+  // succeed, and letting it through means Paynow accepts the request, issues a
+  // poll URL, and reports "Cancelled" seconds later — which reads to the
+  // student as though they declined a prompt they never received.
+  const usable = checkMobileNumber(phone, t.method);
+  if (!usable.ok) {
     // Nothing was sent to Paynow, so withdraw the charge we raised.
     await withdrawChargesForPayment(
       t.payment.id,
       "Withdrawn automatically — no valid mobile number was given.",
     );
-    return { ok: false, reference: t.payment.reference, error: "Enter a valid mobile money number." };
+    return { ok: false, reference: t.payment.reference, error: usable.error };
+  }
+
+  // Throttle by the number being CALLED, not just the account calling it.
+  // The phone field is free text, so without this the per-student payment
+  // budget doubles as a budget for pushing USSD prompts at someone else's
+  // phone — someone who never consented and has no way to make it stop.
+  const destinationGate = await rateLimit({
+    key: `promptdest:${phoneBucket(phone)}`,
+    ...PROMPT_DESTINATION_LIMIT,
+  });
+  if (!destinationGate.allowed) {
+    await withdrawChargesForPayment(
+      t.payment.id,
+      "Withdrawn automatically — too many prompts to this number.",
+    );
+    return {
+      ok: false,
+      reference: t.payment.reference,
+      error:
+        "That number has already been sent several payment prompts recently. " +
+        "Please wait a few minutes before trying again, or pay online instead.",
+    };
   }
 
   const r = await createPaynowMobilePayment({
@@ -406,6 +451,10 @@ async function startMobileCheckout(
     : r.ambiguous
       ? "uncertain"
       : (r.providerError ?? r.error ?? "declined");
+  // Masked, so "which number did this actually go to" is answerable later.
+  // Without it, a prompt that comes back Cancelled is undiagnosable: the number
+  // lived only in the request we already sent.
+  const destination = { method: t.method, destination: maskPhone(phone) };
 
   await prisma.payment.update({
     where: { id: t.payment.id },
@@ -420,8 +469,14 @@ async function startMobileCheckout(
             pollUrl: r.pollUrl,
             providerRef: r.providerRef,
             rawStatus,
+            payload: destination,
           },
-          update: { pollUrl: r.pollUrl, providerRef: r.providerRef, rawStatus },
+          update: {
+            pollUrl: r.pollUrl,
+            providerRef: r.providerRef,
+            rawStatus,
+            payload: destination,
+          },
         },
       },
     },
@@ -613,7 +668,20 @@ export async function pollAndSettle(reference: string): Promise<PollResult> {
       return { status: "paid", reconciled: true };
     case "cancelled":
       await setPaymentStatus(reference, PaymentStatus.CANCELLED, verify.status);
-      return { status: "failed", message: "This payment was cancelled.", reconciled };
+      return {
+        status: "failed",
+        // Paynow returns the same "Cancelled" whether the payer declined the
+        // prompt or the network never delivered it — an unregistered wallet,
+        // a number on the wrong network, a line that can't receive USSD. Saying
+        // flatly "you cancelled this" is therefore a guess, and when it's the
+        // wrong guess the student is left with no idea what to do differently.
+        message: wasMobilePrompt(payment.transaction)
+          ? "This payment didn't go through — the prompt was either declined, or " +
+            "it couldn't reach that number. Check the number is a registered " +
+            "mobile money line and try again."
+          : "This payment was cancelled.",
+        reconciled,
+      };
     case "refunded":
       await setPaymentStatus(reference, PaymentStatus.REFUNDED, verify.status);
       return {

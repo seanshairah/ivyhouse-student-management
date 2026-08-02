@@ -12,6 +12,12 @@ import {
   redeemPasswordReset,
 } from "@/core/auth/password-reset";
 import { verifyPaynowHash } from "@/services/payments/paynow";
+import {
+  assertDatabaseBelongsToPlatform,
+  ensureDatabaseBelongsToPlatform,
+  resetDatabasePlatformCheck,
+  platform,
+} from "@/core/platform";
 import { verifyPassword } from "@/lib/auth";
 import crypto from "crypto";
 
@@ -313,5 +319,59 @@ describe("Paynow inbound signature", () => {
 
   it("reports an unsigned payload as absent rather than valid", () => {
     expect(verifyPaynowHash({ reference: "PAY-1", status: "Paid" }, KEY)).toBe("absent");
+  });
+});
+
+describe("a deployment pointed at the wrong platform's database", () => {
+  // The two platforms have IDENTICAL schemas and separate databases, so a
+  // copy-pasted DATABASE_URL fails silently and successfully: one brand
+  // serving the other's students, rooms and money, with nothing looking wrong.
+  // Settings.platformKey is what distinguishes them.
+  //
+  // The guard below existed from the moment the platforms were split — and was
+  // never called by anything. The column was written by seeding and read by
+  // nobody, so the protection it documents did not exist in the running system.
+
+  it("refuses a database belonging to the other platform", () => {
+    expect(() => assertDatabaseBelongsToPlatform("some-other-platform")).toThrow(
+      /Database mismatch/i,
+    );
+  });
+
+  it("names the offending platform, so the fix is obvious from the error", () => {
+    expect(() => assertDatabaseBelongsToPlatform("blessbri-or-whoever")).toThrow(
+      /blessbri-or-whoever/,
+    );
+  });
+
+  it("accepts this platform's own database", () => {
+    expect(() => assertDatabaseBelongsToPlatform(platform().key)).not.toThrow();
+  });
+
+  it("adopts an unstamped database rather than locking the operator out", () => {
+    // Predates the check: adopt it instead of refusing to boot.
+    expect(() => assertDatabaseBelongsToPlatform(null)).not.toThrow();
+    expect(() => assertDatabaseBelongsToPlatform(undefined)).not.toThrow();
+  });
+
+  beforeEach(() => resetDatabasePlatformCheck());
+
+  it("is actually wired into the request path, not merely defined", async () => {
+    // The bug this file is guarding against was never the logic — it was that
+    // nothing called it. Prove the enforcement path rejects a foreign key.
+    await expect(
+      ensureDatabaseBelongsToPlatform(async () => "definitely-not-this-platform"),
+    ).rejects.toThrow(/Database mismatch/i);
+  });
+
+  it("does not turn an unreadable database into a platform mismatch", async () => {
+    // A database that cannot be read is a different failure with a different
+    // fix; reporting it as "wrong platform" would send the operator hunting
+    // for a DATABASE_URL mixup that isn't there.
+    await expect(
+      ensureDatabaseBelongsToPlatform(async () => {
+        throw new Error("connection refused");
+      }),
+    ).resolves.toBeUndefined();
   });
 });

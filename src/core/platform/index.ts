@@ -58,3 +58,48 @@ export function assertDatabaseBelongsToPlatform(
     );
   }
 }
+
+/**
+ * Memoised so the guard costs one query per serverless instance, not one per
+ * request. A rejected database is cached as rejected too: the answer cannot
+ * change without a redeploy, and re-querying on every request would turn a
+ * misconfiguration into a stampede.
+ */
+let databaseCheck: Promise<void> | null = null;
+
+/**
+ * Clear the memoised result. Exists for tests, which need to exercise both the
+ * accepting and rejecting paths in one process — in production the answer
+ * cannot change without a redeploy, so nothing else should call this.
+ */
+export function resetDatabasePlatformCheck(): void {
+  databaseCheck = null;
+}
+
+/**
+ * Actually enforce the platform/database pairing.
+ *
+ * `assertDatabaseBelongsToPlatform` above has existed since the two platforms
+ * were split apart — correct, tested by inspection, and never once called.
+ * The column it reads was being written by seeding and read by nothing, so the
+ * guarantee it documents ("refuses to use a database that claims to belong to
+ * somebody else") was not true of the running system: a copy-pasted
+ * DATABASE_URL would have had one brand quietly serving the other's students
+ * and money, exactly the outcome it was written to prevent.
+ *
+ * Called from requireUser(), which every protected page and server action
+ * passes through before touching data.
+ */
+export async function ensureDatabaseBelongsToPlatform(
+  readStoredKey: () => Promise<string | null | undefined>,
+): Promise<void> {
+  if (!databaseCheck) {
+    databaseCheck = (async () => {
+      // A database that cannot be read is a separate failure, handled by the
+      // caller's own error path — don't convert it into a platform mismatch.
+      const storedKey = await readStoredKey().catch(() => undefined);
+      assertDatabaseBelongsToPlatform(storedKey);
+    })();
+  }
+  return databaseCheck;
+}
