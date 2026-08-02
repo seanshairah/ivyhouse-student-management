@@ -94,6 +94,32 @@ export function maskPhone(phone: string): string {
  * numbers being protected, which would hand an attacker who reached the
  * database exactly the thing the throttle exists to defend.
  */
+/**
+ * Does this look like filler rather than someone's actual number?
+ *
+ * Seeded and imported records carry numbers like 0771234567 — well-formed,
+ * on the right network, and completely unreachable. Pre-filling one into the
+ * payment dialog turns it into the default destination: the prompt goes
+ * nowhere, the network rejects it instantly, and the student is told the
+ * payment was "cancelled" by someone who never saw it. That is exactly how
+ * the first live EcoCash test failed.
+ *
+ * Used ONLY to decide whether to pre-fill the field — never to block a number.
+ * Someone whose real number happens to look tidy can still type it in, and
+ * Paynow's own test numbers (0771111111 and friends) stay usable.
+ */
+export function looksLikePlaceholderPhone(phone: string | null | undefined): boolean {
+  const local = toLocalZwPhone(phone ?? "");
+  if (local.length !== 10) return true; // malformed is no better than filler
+  const subscriber = local.slice(3); // drop the 07x network prefix
+
+  if (/^(\d)\1+$/.test(subscriber)) return true; // 1111111, 0000000
+  // Straight runs in either direction: 1234567, 7654321.
+  const ascending = subscriber.split("").every((d, i, a) => i === 0 || +d === +a[i - 1] + 1);
+  const descending = subscriber.split("").every((d, i, a) => i === 0 || +d === +a[i - 1] - 1);
+  return ascending || descending;
+}
+
 export function phoneBucket(phone: string): string {
   return crypto
     .createHash("sha256")

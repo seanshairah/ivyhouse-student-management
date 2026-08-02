@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
 import { CancelPaymentButton } from "@/components/student/cancel-payment-button";
 import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
+import { looksLikePlaceholderPhone } from "@/services/payments/paynow";
 import { formatCurrency, formatDate, formatDateTime, toNumber } from "@/lib/utils";
 import {
   APPLICATION_STATUS_META,
@@ -77,6 +78,10 @@ export default async function StudentHomePage() {
     ]);
 
   const firstName = (profile?.fullName ?? session.name).split(" ")[0];
+  // Only offer a number worth sending a prompt to. A seeded placeholder is
+  // well-formed and unreachable, so pre-filling it makes the wrong number the
+  // default and the payment fails as an unexplained "cancellation".
+  const prefillPhone = looksLikePlaceholderPhone(profile?.phone) ? "" : profile!.phone;
   const monthly = monthlyRentFor(
     profile?.room?.type,
     profile?.room ? toNumber(profile.room.price) : null,
@@ -167,14 +172,14 @@ export default async function StudentHomePage() {
               amount={monthly}
               title="Next month's rent"
               triggerLabel={`Next month · ${formatCurrency(monthly)}`}
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
             />
             <EcocashPayDialog
               purpose="RENT_SEMESTER"
               amount={monthly * SEMESTER_MONTHS}
               title="Next semester's rent"
               triggerLabel={`Next semester · ${formatCurrency(monthly * SEMESTER_MONTHS)}`}
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
               variant="brand"
             />
             <EcocashPayDialog
@@ -182,7 +187,7 @@ export default async function StudentHomePage() {
               amount={TRANSPORT_FEE}
               title="Transport service"
               triggerLabel={`Transport · ${formatCurrency(TRANSPORT_FEE)}`}
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
               variant="brand"
             />
           </CardContent>

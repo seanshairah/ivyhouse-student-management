@@ -37,6 +37,7 @@ import {
   checkMobileNumber,
   maskPhone,
   phoneBucket,
+  looksLikePlaceholderPhone,
   PAYNOW_CURRENCY,
 } from "@/services/payments/paynow";
 
@@ -1389,6 +1390,41 @@ describe("payment prompts cannot be used to hammer someone else's phone", () => 
       phone: SHARED,
     });
     expect(next.ok).toBe(true);
+  });
+
+  it("does not offer a placeholder number as the default to pay from", () => {
+    // 0771234567 is what seeding and bulk imports leave behind: well-formed,
+    // on the right network, and unreachable. Pre-filled into the dialog it
+    // becomes the default destination, and the payment dies as an
+    // unexplained "cancellation" — which is exactly how the first live
+    // EcoCash test failed.
+    expect(looksLikePlaceholderPhone("0771234567")).toBe(true);
+    expect(looksLikePlaceholderPhone("0771111111")).toBe(true);
+    expect(looksLikePlaceholderPhone("0770000000")).toBe(true);
+    expect(looksLikePlaceholderPhone("0777654321")).toBe(true);
+    // Missing or malformed is no more use as a default than filler.
+    expect(looksLikePlaceholderPhone(null)).toBe(true);
+    expect(looksLikePlaceholderPhone("")).toBe(true);
+    expect(looksLikePlaceholderPhone("12345")).toBe(true);
+  });
+
+  it("still offers an ordinary number", () => {
+    expect(looksLikePlaceholderPhone("0772904617")).toBe(false);
+    expect(looksLikePlaceholderPhone("0783461920")).toBe(false);
+    expect(looksLikePlaceholderPhone("+263772904617")).toBe(false);
+  });
+
+  it("never blocks a number, only declines to pre-fill it", async () => {
+    // The check decides a default, not a permission: someone whose real
+    // number happens to look tidy must still be able to type it and pay.
+    expect(checkMobileNumber("0771234567", "ecocash").ok).toBe(true);
+    const r = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: "0771234567",
+    });
+    expect(r.ok).toBe(true);
   });
 
   it("buckets numbers without storing them", () => {
