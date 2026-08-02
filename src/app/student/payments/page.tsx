@@ -33,6 +33,7 @@ import { EmptyState } from "@/components/ui/misc";
 import { PayButton } from "@/components/student/pay-button";
 import { CancelPaymentButton } from "@/components/student/cancel-payment-button";
 import { EcocashPayDialog } from "@/components/student/ecocash-pay-dialog";
+import { looksLikePlaceholderPhone } from "@/services/payments/paynow";
 import { formatCurrency, formatDate, toNumber } from "@/lib/utils";
 import {
   PAYMENT_STATUS_META,
@@ -77,6 +78,10 @@ export default async function StudentPaymentsPage() {
   ]);
 
   const pending = payments.filter((p) => p.status === PaymentStatus.PENDING);
+  // Only offer a number worth sending a prompt to. A seeded placeholder is
+  // well-formed and unreachable, so pre-filling it makes the wrong number the
+  // default and the payment fails as an unexplained "cancellation".
+  const prefillPhone = looksLikePlaceholderPhone(profile.phone) ? "" : profile.phone;
   const monthly = monthlyRentFor(
     profile.room?.type,
     profile.room ? toNumber(profile.room.price) : null,
@@ -178,7 +183,7 @@ export default async function StudentPaymentsPage() {
               amount={monthly}
               title="Next month's rent"
               triggerLabel="Pay next month"
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
               fullWidth
             />
           </div>
@@ -195,7 +200,7 @@ export default async function StudentPaymentsPage() {
               amount={monthly * SEMESTER_MONTHS}
               title="Next semester's rent"
               triggerLabel="Pay next semester"
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
               fullWidth
             />
           </div>
@@ -212,7 +217,7 @@ export default async function StudentPaymentsPage() {
               amount={TRANSPORT_FEE}
               title="Transport service"
               triggerLabel="Pay transport"
-              defaultPhone={profile.phone}
+              defaultPhone={prefillPhone}
               variant="brand"
               fullWidth
             />
