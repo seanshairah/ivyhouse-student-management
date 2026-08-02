@@ -1311,6 +1311,86 @@ describe("payment prompts cannot be used to hammer someone else's phone", () => 
     expect(after.transport.outstanding).toBe(before.transport.outstanding);
   });
 
+  it("names the student in what the payer is asked to approve", async () => {
+    // A student may legitimately pay from a parent's or guardian's wallet, so
+    // the number is not restricted to their own. That is only safe if whoever
+    // holds the phone can see who they are paying for — otherwise a prompt
+    // pushed at a stranger is indistinguishable from a real one, and their
+    // money settles a debt belonging to whoever sent it.
+    let sentBody = "";
+    const realFetch = global.fetch;
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+    global.fetch = (async (_url: string, init: RequestInit) => {
+      sentBody = String(init.body);
+      return {
+        text: async () => "status=Ok&pollurl=https://www.paynow.co.zw/poll&paynowreference=1",
+      } as Response;
+    }) as typeof fetch;
+
+    try {
+      await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method: "ecocash",
+        phone: "0779990001",
+      });
+      const sent = new URLSearchParams(sentBody);
+      expect(sent.get("additionalinfo")).toContain("Payments Test");
+    } finally {
+      global.fetch = realFetch;
+      delete process.env.PAYNOW_MODE;
+      delete process.env.PAYNOW_INTEGRATION_ID;
+      delete process.env.PAYNOW_INTEGRATION_KEY;
+    }
+  });
+
+  it("keeps the payer's name off the charge itself", async () => {
+    // The ledger and the receipt describe the debt, not who funded it.
+    const r = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: "0779990002",
+    });
+    const charge = await prisma.charge.findFirst({
+      where: { originPayment: { reference: r.reference! } },
+    });
+    expect(charge?.description).toBe("Campus transport — 1 month");
+    expect(charge?.description).not.toContain("Payments Test");
+  });
+
+  it("forgives the throttle once a number actually pays", async () => {
+    // One parent's wallet paying for several students is the case the
+    // anti-spam throttle must never block. Approving a prompt is consent, so
+    // settling releases the number; ignoring prompts still accumulates.
+    const SHARED = "0779995555";
+    for (let i = 0; i < 3; i += 1) {
+      const r = await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method: "ecocash",
+        phone: SHARED,
+      });
+      if (i < 2 && r.reference) {
+        await cancelUnclearedPayment(r.reference).catch(() => undefined);
+      } else if (r.reference) {
+        // The third one is approved on the handset.
+        await settlePayment(r.reference);
+      }
+    }
+
+    // Budget would be exhausted by now had settlement not cleared it.
+    const next = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: SHARED,
+    });
+    expect(next.ok).toBe(true);
+  });
+
   it("buckets numbers without storing them", () => {
     // The rate-limit table must not become a directory of everyone's phone.
     const bucket = phoneBucket("0779998888");
