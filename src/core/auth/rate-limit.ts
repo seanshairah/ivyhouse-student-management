@@ -118,3 +118,19 @@ export const PAYMENT_LIMIT = { limit: 12, windowSeconds: 10 * 60 };
  * inside a quarter of an hour.
  */
 export const PROMPT_DESTINATION_LIMIT = { limit: 3, windowSeconds: 15 * 60 };
+/**
+ * How often the reconciliation sweep may actually run.
+ *
+ * /api/health is deliberately public — it is a keep-warm and uptime probe, and
+ * gating it behind a secret would mean an outage looks like a healthy 401. But
+ * it also runs the payment sweep, which makes one outbound Paynow call for
+ * every in-flight payment. That turns one unauthenticated GET into N provider
+ * calls: cheap to send, expensive to serve, and the likely outcome is Paynow
+ * throttling or blocking us — which would break settlement for real students.
+ *
+ * The sweep is idempotent and time-based, so running it more than once every
+ * few minutes achieves nothing. A cooldown removes the amplification without
+ * needing a secret, and the daily cron clears it comfortably — so this can
+ * never be the reason a payment goes unsettled.
+ */
+export const SWEEP_COOLDOWN = { limit: 1, windowSeconds: 5 * 60 };

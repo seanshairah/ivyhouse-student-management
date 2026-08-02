@@ -6,7 +6,7 @@ import {
   canAccessPayment,
   canAccessStudent,
 } from "@/core/auth/access";
-import { rateLimit, clearRateLimit } from "@/core/auth/rate-limit";
+import { rateLimit, clearRateLimit, SWEEP_COOLDOWN } from "@/core/auth/rate-limit";
 import {
   createPasswordReset,
   redeemPasswordReset,
@@ -373,5 +373,37 @@ describe("a deployment pointed at the wrong platform's database", () => {
         throw new Error("connection refused");
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("the public health endpoint cannot be used to hammer Paynow", () => {
+  // /api/health is deliberately public — it is a keep-warm and uptime probe,
+  // and gating it behind a secret would make an outage indistinguishable from
+  // a misconfigured credential. But it also runs the payment sweep, which
+  // makes one outbound Paynow call per in-flight payment. Unthrottled, that
+  // turns a single anonymous GET into N provider calls, and the likely result
+  // is Paynow throttling or blocking us — breaking settlement for real
+  // students.
+
+  beforeEach(async () => {
+    await prisma.rateLimit.deleteMany({ where: { key: "sweep:health" } });
+  });
+
+  it("allows the first sweep and refuses the ones straight after it", async () => {
+    const first = await rateLimit({ key: "sweep:health", ...SWEEP_COOLDOWN });
+    expect(first.allowed).toBe(true);
+
+    for (let i = 0; i < 5; i += 1) {
+      const again = await rateLimit({ key: "sweep:health", ...SWEEP_COOLDOWN });
+      expect(again.allowed).toBe(false);
+    }
+  });
+
+  it("uses a window the daily cron clears comfortably", () => {
+    // The cooldown must never be the reason a payment goes unsettled. A daily
+    // run clears five minutes by three orders of magnitude; if this window
+    // ever grew past the schedule it would start suppressing real sweeps.
+    expect(SWEEP_COOLDOWN.windowSeconds).toBeLessThan(24 * 60 * 60);
+    expect(SWEEP_COOLDOWN.limit).toBeGreaterThanOrEqual(1);
   });
 });
