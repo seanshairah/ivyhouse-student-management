@@ -34,6 +34,9 @@ import {
   getPaynowConfig,
   createPaynowPayment,
   createPaynowMobilePayment,
+  checkMobileNumber,
+  maskPhone,
+  phoneBucket,
   PAYNOW_CURRENCY,
 } from "@/services/payments/paynow";
 
@@ -97,6 +100,11 @@ beforeEach(async () => {
     },
   });
   profileId = profile.id;
+
+  // Rate-limit buckets live in the database and are keyed by destination
+  // number, not by test — so without this, one test's prompts exhaust the
+  // budget for every later test using the same number.
+  await prisma.rateLimit.deleteMany({});
 });
 
 afterAll(async () => {
@@ -1131,6 +1139,185 @@ describe("the return URL carries the payment's own reference", () => {
     // ran successfully over the final values object, reference-bearing
     // returnurl included.
     expect(sent.get("hash")).toMatch(/^[0-9A-F]{128}$/);
+  });
+});
+
+describe("a mobile prompt sent to a number that cannot receive it", () => {
+  // The live incident: a $15 EcoCash prompt came back "Cancelled" 5.67 seconds
+  // after being sent — far too fast for anyone to have declined it on a
+  // handset. The number was 0771234567, a seeded placeholder that isn't a
+  // registered wallet, pre-filled into the dialog from the student's profile.
+  // Paynow accepted the request, issued a poll URL, then cancelled it.
+
+  it("refuses an EcoCash prompt to a non-Econet number before contacting Paynow", async () => {
+    const r = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: "0712345678", // NetOne — OneMoney's rail, not EcoCash's
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/Econet/i);
+
+    // The charge raised for the attempt must not be left standing.
+    expect((await getStudentAccount(profileId)).transport.outstanding).toBe(0);
+  });
+
+  it("refuses a number that isn't a Zimbabwean mobile number at all", async () => {
+    const r = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: "12345",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/07/);
+    expect((await getStudentAccount(profileId)).transport.outstanding).toBe(0);
+  });
+
+  it("accepts a well-formed Econet number", () => {
+    expect(checkMobileNumber("0771234567", "ecocash").ok).toBe(true);
+    expect(checkMobileNumber("0781234567", "ecocash").ok).toBe(true);
+    // Also accepts the international form, normalised.
+    expect(checkMobileNumber("+263771234567", "ecocash").ok).toBe(true);
+  });
+
+  it("routes OneMoney to NetOne numbers only", () => {
+    expect(checkMobileNumber("0712345678", "onemoney").ok).toBe(true);
+    expect(checkMobileNumber("0771234567", "onemoney").ok).toBe(false);
+  });
+
+  it("records which number a prompt went to, masked", async () => {
+    const r = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: "0771234567",
+    });
+    expect(r.ok).toBe(true);
+
+    const stored = await prisma.paymentTransaction.findFirst({
+      where: { payment: { reference: r.reference! } },
+    });
+    // Enough to recognise a wrong or placeholder number; not a second copy of
+    // every payer's phone number sitting in the payments table.
+    expect(stored?.payload).toMatchObject({
+      method: "ecocash",
+      destination: "077***4567",
+    });
+  });
+
+  it("never stores the whole number", () => {
+    expect(maskPhone("0771234567")).toBe("077***4567");
+    expect(maskPhone("0771234567")).not.toContain("1234567");
+  });
+});
+
+describe("payment prompts cannot be used to hammer someone else's phone", () => {
+  // The phone field is free text: a student can type any number they like.
+  // The per-student payment limit protects the merchant account from runaway
+  // retries, but does nothing for the person on the other end of a number they
+  // never gave us. Throttling has to be keyed to the number being CALLED.
+
+  const VICTIM = "0779998888";
+
+  it("stops repeated prompts to the same number, even from one account", async () => {
+    // Each attempt is cancelled first, because the 90-second duplicate guard
+    // would otherwise just hand back the in-flight payment without sending a
+    // second prompt. Reuse isn't the abuse — a fresh send is, and an attacker
+    // clears the way for one exactly like this.
+    const results = [];
+    for (let i = 0; i < 5; i += 1) {
+      const r = await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method: "ecocash",
+        phone: VICTIM,
+      });
+      results.push(r);
+      if (r.reference) await cancelUnclearedPayment(r.reference).catch(() => undefined);
+    }
+    const blocked = results.filter((r) => !r.ok && /already been sent/i.test(r.error ?? ""));
+    expect(blocked.length).toBeGreaterThan(0);
+  });
+
+  it("blocks a second account targeting a number the first already hammered", async () => {
+    // The throttle is per-number across the whole platform, so switching
+    // accounts must not reset it — otherwise it only inconveniences the
+    // attacker rather than protecting the victim.
+    for (let i = 0; i < 4; i += 1) {
+      const r = await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method: "ecocash",
+        phone: VICTIM,
+      });
+      if (r.reference) await cancelUnclearedPayment(r.reference).catch(() => undefined);
+    }
+
+    const otherUser = await prisma.user.create({
+      data: {
+        email: `attacker-${Date.now()}-${counter++}@test.local`,
+        passwordHash: "x",
+        name: "Other",
+        role: "STUDENT",
+      },
+    });
+    const otherProfile = await prisma.studentProfile.create({
+      data: {
+        userId: otherUser.id,
+        fullName: "Other",
+        email: otherUser.email,
+        phone: "0771111111",
+        houseId,
+        roomId,
+      },
+    });
+
+    const r = await createSelfPayment({
+      profileId: otherProfile.id,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: VICTIM,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/already been sent/i);
+  });
+
+  it("leaves no charge behind when a prompt is blocked", async () => {
+    // Exhaust the budget for this number first, so the attempt measured below
+    // is definitely the blocked one.
+    for (let i = 0; i < 4; i += 1) {
+      const r = await createSelfPayment({
+        profileId,
+        purpose: "TRANSPORT_MONTH",
+        method: "ecocash",
+        phone: VICTIM,
+      });
+      if (r.reference) await cancelUnclearedPayment(r.reference).catch(() => undefined);
+    }
+
+    const before = await getStudentAccount(profileId);
+    const blocked = await createSelfPayment({
+      profileId,
+      purpose: "TRANSPORT_MONTH",
+      method: "ecocash",
+      phone: VICTIM,
+    });
+    expect(blocked.ok).toBe(false);
+
+    // A refused prompt must not leave the student owing money for it.
+    const after = await getStudentAccount(profileId);
+    expect(after.transport.outstanding).toBe(before.transport.outstanding);
+  });
+
+  it("buckets numbers without storing them", () => {
+    // The rate-limit table must not become a directory of everyone's phone.
+    const bucket = phoneBucket("0779998888");
+    expect(bucket).not.toContain("9998888");
+    expect(bucket).toMatch(/^[0-9a-f]{16}$/);
+    // Same number, same bucket — including across formats.
+    expect(phoneBucket("+263779998888")).toBe(bucket);
   });
 });
 

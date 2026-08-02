@@ -24,6 +24,85 @@ export function toLocalZwPhone(phone: string): string {
 }
 
 /**
+ * Which network each mobile-money rail actually runs on.
+ *
+ * EcoCash is Econet, OneMoney is NetOne. Sending an EcoCash prompt to a NetOne
+ * number cannot succeed — but Paynow accepts the request, issues a poll URL,
+ * and only then reports it "Cancelled" seconds later, which reads to the
+ * student as if they declined something they never even saw. Catching the
+ * mismatch here turns a mystery into a sentence they can act on.
+ *
+ * InnBucks is a wallet rather than a network rail, so no prefix rule applies.
+ */
+const NETWORK_PREFIXES: Record<string, { prefixes: string[]; network: string }> = {
+  ecocash: { prefixes: ["077", "078"], network: "Econet" },
+  onemoney: { prefixes: ["071"], network: "NetOne" },
+};
+
+/**
+ * Is this number usable for the chosen rail?
+ *
+ * Deliberately only rejects what is definitely wrong — a well-formed number on
+ * the right network still may not be a registered wallet, and only the network
+ * itself can answer that. This is a cheap pre-check, not a guarantee.
+ */
+export function checkMobileNumber(
+  phone: string,
+  method: MobileMethod,
+): { ok: true } | { ok: false; error: string } {
+  const local = toLocalZwPhone(phone);
+  if (local.length !== 10 || !local.startsWith("0")) {
+    return {
+      ok: false,
+      error: "That doesn't look like a Zimbabwean mobile number. Enter it as 07XXXXXXXX.",
+    };
+  }
+  const rail = NETWORK_PREFIXES[method];
+  if (rail && !rail.prefixes.some((p) => local.startsWith(p))) {
+    const label = method === "ecocash" ? "EcoCash" : "OneMoney";
+    return {
+      ok: false,
+      error:
+        `${label} only works on ${rail.network} numbers ` +
+        `(${rail.prefixes.join(" or ")}). Check the number, or pay online instead.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * A destination number safe to store and show back.
+ *
+ * Kept so a failed prompt can be diagnosed at all: when a payment came back
+ * "Cancelled" seconds after being sent, the single most useful question is
+ * "which number did we actually send it to" — and that was unanswerable,
+ * because nothing recorded it. Masked rather than whole: enough to recognise a
+ * wrong or placeholder number, not a fresh copy of every payer's phone number
+ * sitting in the payments table.
+ */
+export function maskPhone(phone: string): string {
+  const p = toLocalZwPhone(phone);
+  if (p.length < 7) return "***";
+  return `${p.slice(0, 3)}***${p.slice(-4)}`;
+}
+
+/**
+ * A stable, non-reversible identifier for a destination number.
+ *
+ * Used as a rate-limit bucket so prompts aimed at one phone can be throttled
+ * no matter which account sends them — without keeping a list of the phone
+ * numbers being protected, which would hand an attacker who reached the
+ * database exactly the thing the throttle exists to defend.
+ */
+export function phoneBucket(phone: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(toLocalZwPhone(phone))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
  * Reserved and non-routable TLDs. Paynow validates the address it is given and
  * rejects these outright, which surfaces as "The authemail field is required
  * for remote transactions" — an error that reads as if we sent nothing.

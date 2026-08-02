@@ -100,3 +100,21 @@ export async function pruneRateLimits(olderThanSeconds = 3600): Promise<void> {
 export const LOGIN_LIMIT = { limit: 8, windowSeconds: 15 * 60 };
 /** Payment initiations per student. Generous — it only stops runaway retries. */
 export const PAYMENT_LIMIT = { limit: 12, windowSeconds: 10 * 60 };
+/**
+ * Mobile-money prompts per DESTINATION number, across the whole platform.
+ *
+ * PAYMENT_LIMIT is keyed to the paying student, which protects the merchant
+ * account from runaway retries but does nothing for the person on the other
+ * end: a student can type any number they like into the EcoCash field, so the
+ * per-student budget becomes a budget for pushing USSD prompts at a stranger's
+ * phone. Whoever owns that number never consented to any of it and cannot
+ * appeal to us to stop.
+ *
+ * Keyed by a hash of the number rather than the number itself, so throttling
+ * abuse doesn't require accumulating a table of everyone's phone number.
+ *
+ * Tight on purpose. A student paying for themselves needs one prompt, and a
+ * retry or two if the first is fumbled; nobody legitimately needs a fourth
+ * inside a quarter of an hour.
+ */
+export const PROMPT_DESTINATION_LIMIT = { limit: 3, windowSeconds: 15 * 60 };
