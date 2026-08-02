@@ -19,7 +19,7 @@ import {
   phoneBucket,
   type MobileMethod,
 } from "./paynow";
-import { rateLimit, PROMPT_DESTINATION_LIMIT } from "@/core/auth/rate-limit";
+import { rateLimit, clearRateLimit, PROMPT_DESTINATION_LIMIT } from "@/core/auth/rate-limit";
 import {
   monthlyRentFor,
   priceFor,
@@ -176,7 +176,24 @@ export async function createSelfPayment(opts: {
     profile.room?.type,
     profile.room ? toNumber(profile.room.price) : null,
   );
-  const { amount, description, category, months } = priceFor(opts.purpose, monthly);
+  const { amount, description: chargeDescription, category, months } = priceFor(
+    opts.purpose,
+    monthly,
+  );
+
+  // What the person holding the phone actually reads before entering a PIN.
+  //
+  // A student may legitimately pay from someone else's wallet — a parent, a
+  // guardian, an older sibling — so the number is deliberately not restricted
+  // to their own. That flexibility is only safe if whoever is asked to approve
+  // can see WHO they are paying for: "Accommodation — 1 month rent" alone is
+  // approvable by a distracted stranger, and their money would settle a debt
+  // belonging to whoever sent the prompt. Naming the student turns an
+  // anonymous request into one a stranger declines and a parent recognises.
+  //
+  // Kept separate from the charge's own description, which belongs to the
+  // ledger and the receipt, and should not carry the payer's context.
+  const description = `${chargeDescription} — for ${profile.fullName}`;
 
   // Duplicate guard: if an identical attempt is already in flight (same student
   // + amount, started seconds ago), continue THAT one rather than starting a
@@ -265,7 +282,7 @@ export async function createSelfPayment(opts: {
   await raiseCharge({
     studentProfileId: profile.id,
     category,
-    description,
+    description: chargeDescription,
     amount,
     dueDate: dueDateFromNow(),
     periodStart: period.start,
@@ -454,7 +471,13 @@ async function startMobileCheckout(
   // Masked, so "which number did this actually go to" is answerable later.
   // Without it, a prompt that comes back Cancelled is undiagnosable: the number
   // lived only in the request we already sent.
-  const destination = { method: t.method, destination: maskPhone(phone) };
+  const destination = {
+    method: t.method,
+    destination: maskPhone(phone),
+    // The throttle bucket, kept so settlement can forgive it — see
+    // settlePayment. Not reversible to the number itself.
+    bucket: phoneBucket(phone),
+  };
 
   await prisma.payment.update({
     where: { id: t.payment.id },
@@ -902,6 +925,9 @@ export async function settlePayment(reference: string) {
     include: {
       studentProfile: { include: { house: true, room: true } },
       invoice: true,
+      // Carries the throttle bucket for the number that funded this, so a
+      // wallet that actually pays stops being counted as one being pestered.
+      transaction: true,
     },
   });
   if (!payment) throw new Error("Payment not found");
@@ -1053,6 +1079,15 @@ export async function settlePayment(reference: string) {
     entityId: payment.id,
     metadata: { reference, amount: toNumber(payment.amount) },
   });
+
+  // Approving a prompt is consent, so stop counting this number as one being
+  // pestered. Without this, the anti-spam throttle punishes exactly the
+  // legitimate case it was never meant to touch: one parent's wallet paying
+  // for several students, or a family number used month after month. A wallet
+  // that keeps ignoring prompts still accumulates against the limit; one that
+  // pays is released.
+  const bucket = (payment.transaction?.payload as { bucket?: string } | null)?.bucket;
+  if (bucket) await clearRateLimit(`promptdest:${bucket}`).catch(() => undefined);
 
   return { payment, receipt, alreadyPaid: false };
 }
