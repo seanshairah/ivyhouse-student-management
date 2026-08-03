@@ -149,9 +149,13 @@ export function PaymentsTable({ payments }: { payments: PaymentRow[] }) {
                         {/* Uncleared requests pile up from abandoned checkouts
                             and ignored prompts. Only in-flight ones can be
                             cancelled — the action refuses settled payments. */}
+                        {/* Outline, not ghost: this sits directly beside a
+                            bordered "Mark paid" in a table row, where a
+                            chromeless button reads as a label rather than a
+                            control until the pointer happens to cross it. */}
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="outline"
                           disabled={pending}
                           onClick={() => cancel(p.reference)}
                         >
