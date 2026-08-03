@@ -35,6 +35,17 @@ const buttonVariants = cva(
         icon: "h-10 w-10",
       },
     },
+    compoundVariants: [
+      // Icon-only ghost buttons — table row actions, dismiss controls — carry
+      // no label and no chrome, so at rest they are an unexplained glyph that
+      // only announces itself as a control once the pointer lands on it. A
+      // touch user never gets that hint at all. Give them a resting surface.
+      {
+        variant: "ghost",
+        size: "icon",
+        className: "bg-muted/60 text-muted-foreground hover:text-accent-foreground",
+      },
+    ],
     defaultVariants: { variant: "default", size: "default" },
   },
 );
