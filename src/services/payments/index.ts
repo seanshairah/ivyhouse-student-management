@@ -693,15 +693,25 @@ export async function pollAndSettle(reference: string): Promise<PollResult> {
       await setPaymentStatus(reference, PaymentStatus.CANCELLED, verify.status);
       return {
         status: "failed",
-        // Paynow returns the same "Cancelled" whether the payer declined the
-        // prompt or the network never delivered it — an unregistered wallet,
-        // a number on the wrong network, a line that can't receive USSD. Saying
-        // flatly "you cancelled this" is therefore a guess, and when it's the
-        // wrong guess the student is left with no idea what to do differently.
+        // Paynow returns the same "Cancelled" for every instant refusal, and
+        // Paynow support confirmed which one it actually is here: insufficient
+        // funds. That matters because the wallet can look funded and still be
+        // empty for our purposes — EcoCash holds USD and ZWL as SEPARATE
+        // balances, and this platform collects strictly in USD, so a wallet
+        // with plenty of ZWL has nothing to pay a USD prompt with.
+        //
+        // The previous wording led with "check the number is registered",
+        // which is the expensive kind of wrong: it sends someone to re-check a
+        // number that was never the problem, while the actual cause — the
+        // wrong balance being looked at — goes unmentioned. Lead with the
+        // confirmed cause and name the currency explicitly; keep the delivery
+        // failures as secondary, since a prompt to an unreachable line reports
+        // identically and we cannot tell them apart from here.
         message: wasMobilePrompt(payment.transaction)
-          ? "This payment didn't go through — the prompt was either declined, or " +
-            "it couldn't reach that number. Check the number is a registered " +
-            "mobile money line and try again."
+          ? "This payment didn't go through. The usual cause is not enough " +
+            "money in the wallet's USD balance — EcoCash keeps USD and ZWL " +
+            "separately, so check the USD one specifically. It can also mean " +
+            "the prompt was declined, or never reached that number."
           : "This payment was cancelled.",
         reconciled,
       };

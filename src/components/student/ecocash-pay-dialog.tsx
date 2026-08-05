@@ -189,6 +189,19 @@ export function EcocashPayDialog({
               <p className="text-xs text-muted-foreground">
                 You&apos;ll get a prompt on this number to approve {formatCurrency(amount)}.
               </p>
+              {/*
+                Said before the prompt goes out, not after it fails. EcoCash
+                holds USD and ZWL as separate balances, and this is collected
+                strictly in USD — so a wallet that plainly has money in it
+                still refuses the prompt within seconds if the USD side is
+                short. Paynow confirmed that is what every failed prompt on
+                this account has been. Naming the balance up front is the only
+                version of this a student can act on in time.
+              */}
+              <p className="text-xs text-muted-foreground">
+                It comes off your <span className="font-medium">USD</span>{" "}
+                balance — check that one has enough, not the ZWL balance.
+              </p>
             </div>
             <DialogFooter className="flex-col gap-2 sm:flex-row">
               <Button
