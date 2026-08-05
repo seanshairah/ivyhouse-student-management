@@ -1515,3 +1515,110 @@ describe("a wrong PAYNOW_AUTH_EMAIL must not stop people paying", () => {
     expect(resolveAuthEmail("someone@nowhere.test")).not.toContain(".test");
   });
 });
+
+describe("a gateway that falls over is not a customer declining", () => {
+  // Found by pointing the doctor script at the live endpoint: Paynow's edge
+  // answered "HTTP 503 upstream connect error ... Connection reset by peer".
+  // fetch() resolves for that — it is a real HTTP response — so only a THROWN
+  // connection error was ever treated as uncertain. A 503 therefore counted as
+  // a hard decline: the payment was marked FAILED and the charge behind it
+  // withdrawn, while the student was told their payment could not be started.
+  // Nobody had declined anything; the gateway simply never answered.
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+    delete process.env.PAYNOW_MODE;
+    delete process.env.PAYNOW_INTEGRATION_ID;
+    delete process.env.PAYNOW_INTEGRATION_KEY;
+  });
+
+  function live() {
+    process.env.PAYNOW_MODE = "live";
+    process.env.PAYNOW_INTEGRATION_ID = "test-id";
+    process.env.PAYNOW_INTEGRATION_KEY = "test-key";
+  }
+  function respond(status: number, body: string) {
+    global.fetch = (async () => ({ status, text: async () => body }) as Response) as typeof fetch;
+  }
+
+  it("treats a 503 from the gateway as ambiguous, so the charge survives", async () => {
+    live();
+    respond(503, "upstream connect error or disconnect/reset before headers");
+
+    const r = await createPaynowPayment({
+      reference: "PAY-503-WEB",
+      amount: 120,
+      email: "student@example.com",
+      description: "Rent",
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.ambiguous).toBe(true);
+  });
+
+  it("keeps the provider's exact words instead of collapsing them to 'Paynow error'", async () => {
+    live();
+    respond(503, "upstream connect error or disconnect/reset before headers");
+
+    const r = await createPaynowPayment({
+      reference: "PAY-503-DETAIL",
+      amount: 120,
+      email: "student@example.com",
+      description: "Rent",
+    });
+
+    // The whole point: an unrecognised body is exactly when detail matters, and
+    // it was exactly then that every clue used to be discarded.
+    expect(r.providerError).toContain("503");
+    expect(r.providerError).toContain("upstream connect error");
+  });
+
+  it("still treats a genuine refusal as a hard decline", async () => {
+    live();
+    respond(200, "status=Error&error=Invalid Id.");
+
+    const r = await createPaynowPayment({
+      reference: "PAY-REFUSED",
+      amount: 120,
+      email: "student@example.com",
+      description: "Rent",
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.ambiguous).toBeFalsy();
+    expect(r.providerError).toBe("Invalid Id.");
+  });
+
+  it("applies the same rule to mobile-money prompts", async () => {
+    live();
+    respond(502, "<html><body>Bad Gateway</body></html>");
+
+    const r = await createPaynowMobilePayment({
+      reference: "PAY-502-MOBILE",
+      amount: 15,
+      email: "student@example.com",
+      description: "Transport",
+      phone: "0771111111",
+      method: "ecocash",
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.ambiguous).toBe(true);
+    expect(r.providerError).toContain("502");
+  });
+
+  it("never shows a student the raw provider wording", async () => {
+    live();
+    respond(503, "upstream connect error TLS_error:|33554536:system library");
+
+    const r = await createPaynowPayment({
+      reference: "PAY-503-SAFE",
+      amount: 120,
+      email: "student@example.com",
+      description: "Rent",
+    });
+
+    expect(r.error).not.toContain("TLS_error");
+    expect(r.error).not.toContain("upstream");
+  });
+});

@@ -18,7 +18,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "postinstall": "prisma generate",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "paynow:doctor": "tsx scripts/paynow-doctor.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

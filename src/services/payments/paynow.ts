@@ -458,6 +458,55 @@ function parsePaynowResponse(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * What actually went wrong, in Paynow's own words — or failing that, the truth
+ * that we do not know.
+ *
+ * This used to collapse to the string "Paynow error" whenever the response was
+ * not the URL-encoded shape we expect. That is the worst possible outcome for
+ * the one case where detail matters most: an unrecognised body is exactly when
+ * something unanticipated has happened, and it was precisely then that every
+ * clue got thrown away. A run of failed live payments produced audit rows
+ * saying only "Paynow error", which is indistinguishable from having never
+ * asked.
+ *
+ * The body is included verbatim, capped, so an HTML error page or a WAF block
+ * is recognisable on sight. This value never reaches a student —
+ * friendlyPaynowError() decides what they see — it exists for logs, the audit
+ * trail, and whoever has to take it to Paynow support.
+ */
+/**
+ * Did the gateway fail to answer, as opposed to answering "no"?
+ *
+ * A 5xx or a 429 is the transport falling over, not Paynow declining anything.
+ * These were being read as hard declines, because the fetch() itself resolved —
+ * only a thrown connection error was ever treated as uncertain. So an upstream
+ * blip marked the payment FAILED and withdrew the charge, and the student was
+ * told their payment could not be started, when in truth nobody had asked
+ * anyone anything. Observed live: Paynow's edge returning
+ * "HTTP 503 upstream connect error ... Connection reset by peer".
+ *
+ * Ambiguous is the conservative reading whichever way it went: if the request
+ * never arrived there is nothing to settle, and if it arrived but the response
+ * was lost, a real transaction exists and must not be written off.
+ */
+function isTransportFailure(httpStatus: number): boolean {
+  return httpStatus >= 500 || httpStatus === 429;
+}
+
+function describeFailure(
+  httpStatus: number,
+  parsed: Record<string, string>,
+  body: string,
+): string {
+  if (parsed.error) return parsed.error;
+  if (parsed.status) return parsed.status;
+  const snippet = body.trim().slice(0, 300).replace(/\s+/g, " ");
+  return snippet
+    ? `Paynow returned HTTP ${httpStatus} with an unrecognised body: ${snippet}`
+    : `Paynow returned HTTP ${httpStatus} with an empty body.`;
+}
+
 /** Create a Paynow payment (or a mock one in development). */
 export async function createPaynowPayment(
   input: InitiatePaymentInput & { authEmailOverride?: string },
@@ -497,7 +546,8 @@ export async function createPaynowPayment(
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: toUrlEncoded(values),
     });
-    const parsed = parsePaynowResponse(await res.text());
+    const body = await res.text();
+    const parsed = parsePaynowResponse(body);
 
     if (parsed.status?.toLowerCase() === "ok") {
       return {
@@ -508,7 +558,18 @@ export async function createPaynowPayment(
         providerRef: parsed.paynowreference,
       };
     }
-    const providerError = parsed.error || parsed.status || "Paynow error";
+    const providerError = describeFailure(res.status, parsed, body);
+
+    // The gateway fell over rather than declining. Keep the payment alive.
+    if (isTransportFailure(res.status) && !parsed.error) {
+      return {
+        ok: false,
+        ambiguous: true,
+        mode: "live",
+        error: "We couldn't reach the payment provider just now. Please try again in a moment.",
+        providerError,
+      };
+    }
 
     // One retry with a different address if that is what it objected to.
     if (isAuthEmailRejection(providerError) && !retried) {
@@ -601,7 +662,8 @@ export async function createPaynowMobilePayment(
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: toUrlEncoded(values),
     });
-    const parsed = parsePaynowResponse(await res.text());
+    const body = await res.text();
+    const parsed = parsePaynowResponse(body);
 
     if (parsed.status?.toLowerCase() === "ok") {
       return {
@@ -614,8 +676,18 @@ export async function createPaynowMobilePayment(
           "Check your phone and enter your EcoCash PIN to approve the payment.",
       };
     }
-    const providerError =
-      parsed.error || parsed.status || "Paynow declined the request.";
+    const providerError = describeFailure(res.status, parsed, body);
+
+    // The gateway fell over rather than declining. Keep the payment alive.
+    if (isTransportFailure(res.status) && !parsed.error) {
+      return {
+        ok: false,
+        ambiguous: true,
+        mode: "live",
+        error: "We couldn't reach the payment provider just now. Please try again in a moment.",
+        providerError,
+      };
+    }
 
     // Same one-shot retry as the web flow: a wrong PAYNOW_AUTH_EMAIL must not
     // stop people paying when the payer's own address would be accepted.
