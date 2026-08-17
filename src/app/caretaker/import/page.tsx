@@ -27,7 +27,11 @@ export default async function CaretakerImportPage() {
         title="Import a roster sheet"
         description={`Upload the Excel book for ${house?.name ?? "your house"} — rooms, students and payments are set to match it exactly.`}
       />
-      <RosterUploader houseName={house?.name ?? "your house"} />
+      <RosterUploader
+        houseName={house?.name ?? "your house"}
+        defaultPriceTwoShare={135}
+        defaultPriceThreeShare={105}
+      />
     </div>
   );
 }
