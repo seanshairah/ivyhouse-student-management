@@ -138,6 +138,18 @@ export async function caretakerAddStudent(
       }
     }
 
+    // The rest of the student's file, captured at creation so the office
+    // never has to chase it later.
+    const details = {
+      nationalId: String(formData.get("nationalId") || "").trim() || null,
+      institution: String(formData.get("institution") || "").trim() || null,
+      program: String(formData.get("program") || "").trim() || null,
+      yearOfStudy: String(formData.get("yearOfStudy") || "").trim() || null,
+      nextOfKinName: String(formData.get("nextOfKinName") || "").trim() || null,
+      nextOfKinPhone: String(formData.get("nextOfKinPhone") || "").trim() || null,
+      nextOfKinRelation: String(formData.get("nextOfKinRelation") || "").trim() || null,
+    };
+
     // This platform's account routine places the student in the (single)
     // house itself; the room placement is ours to do afterwards.
     const created = await createStudentAccount({
@@ -152,6 +164,7 @@ export async function caretakerAddStudent(
         where: { id: created.studentProfileId },
         data: {
           status: StudentStatus.ACTIVE,
+          ...details,
           ...(room ? { roomId: room.id, houseId: room.houseId } : {}),
         },
       });

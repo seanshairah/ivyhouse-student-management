@@ -8,6 +8,7 @@ import {
 const NAV: ShellNavItem[] = [
   { label: "Home", href: "/caretaker", icon: "Home" },
   { label: "Students", href: "/caretaker/students", icon: "Users" },
+  { label: "Import", href: "/caretaker/import", icon: "FileSpreadsheet" },
   { label: "Services", href: "/caretaker/services", icon: "Wrench" },
   { label: "Notify", href: "/caretaker/notify", icon: "Megaphone" },
   { label: "Messages", href: "/caretaker/messages", icon: "MessageSquare" },
@@ -18,7 +19,7 @@ export default async function CaretakerLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   const caretaker = await prisma.caretaker.findFirst({
     where: { OR: [{ userId: session.userId }, { email: session.email }] },
     select: { name: true, email: true },

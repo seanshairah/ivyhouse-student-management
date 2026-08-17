@@ -14,7 +14,7 @@ import { NoteForm } from "@/components/caretaker/note-form";
 import { formatDate, formatDateTime } from "@/lib/utils";
 
 export default async function CaretakerMessagesPage() {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   const caretaker = await prisma.caretaker.findFirst({
     where: { OR: [{ userId: session.userId }, { email: session.email }] },
     select: { houseId: true, email: true },
