@@ -14,7 +14,7 @@ import { EmptyState } from "@/components/ui/misc";
 import { formatDate } from "@/lib/utils";
 
 export default async function CaretakerHomePage() {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   const caretaker = await prisma.caretaker.findFirst({
     where: { OR: [{ userId: session.userId }, { email: session.email }] },
     include: { house: true },

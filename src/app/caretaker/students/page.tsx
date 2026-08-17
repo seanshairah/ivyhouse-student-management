@@ -9,7 +9,7 @@ import {
 } from "@/components/caretaker/students-manager";
 
 export default async function CaretakerStudentsPage() {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   const caretaker = await prisma.caretaker.findFirst({
     where: { OR: [{ userId: session.userId }, { email: session.email }] },
     select: { houseId: true, house: { select: { name: true } } },

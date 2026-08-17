@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/dashboard/page-header";
 import { NotifyHouseForm } from "@/components/caretaker/notify-house-form";
 
 export default async function CaretakerNotifyPage() {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   const caretaker = await prisma.caretaker.findFirst({
     where: { OR: [{ userId: session.userId }, { email: session.email }] },
     select: { houseId: true, house: { select: { name: true } } },

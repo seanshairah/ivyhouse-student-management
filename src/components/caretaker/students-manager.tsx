@@ -386,6 +386,40 @@ export function CaretakerStudentsManager({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
+                  <Label htmlFor="ct-natid">National ID</Label>
+                  <Input id="ct-natid" name="nationalId" placeholder="63-123456A00" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-institution">Institution</Label>
+                  <Input id="ct-institution" name="institution" placeholder="University / college" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-program">Programme</Label>
+                  <Input id="ct-program" name="program" placeholder="BSc Accounting" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-year">Year of study</Label>
+                  <Input id="ct-year" name="yearOfStudy" placeholder="2" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-nok">Next of kin</Label>
+                  <Input id="ct-nok" name="nextOfKinName" placeholder="Full name" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-nok-phone">Kin phone</Label>
+                  <Input id="ct-nok-phone" name="nextOfKinPhone" placeholder="07…" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ct-nok-rel">Relation</Label>
+                  <Input id="ct-nok-rel" name="nextOfKinRelation" placeholder="Mother" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
                   <Label htmlFor="ct-room">Room</Label>
                   <Select id="ct-room" name="roomId" defaultValue="">
                     <option value="">No room yet</option>
@@ -410,7 +444,8 @@ export function CaretakerStudentsManager({
               </div>
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox name="sendCredentials" defaultChecked /> Send login
-                details by email &amp; SMS now
+                details (temporary password) by email &amp; SMS now — they
+                change it on first sign-in
               </label>
             </div>
             <DialogFooter>

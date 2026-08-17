@@ -27,7 +27,7 @@ export async function updateTaskStatusAction(
   status: string,
   notes?: string,
 ): Promise<ActionResult> {
-  await requireRole("CARETAKER");
+  await requireRole(["CARETAKER", "OWNER"]);
   if (!id) return { success: false, error: "Missing request id" };
   if (!VALID_STATUSES.has(status))
     return { success: false, error: "Invalid status" };
@@ -84,7 +84,7 @@ export async function updateTaskStatusAction(
 export async function noteToOwnerAction(
   formData: FormData,
 ): Promise<ActionResult> {
-  const session = await requireRole("CARETAKER");
+  const session = await requireRole(["CARETAKER", "OWNER"]);
   try {
     const subject =
       (formData.get("subject") as string | null)?.trim() || "Note from caretaker";
