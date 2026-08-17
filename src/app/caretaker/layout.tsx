@@ -7,7 +7,9 @@ import {
 
 const NAV: ShellNavItem[] = [
   { label: "Home", href: "/caretaker", icon: "Home" },
+  { label: "Students", href: "/caretaker/students", icon: "Users" },
   { label: "Services", href: "/caretaker/services", icon: "Wrench" },
+  { label: "Notify", href: "/caretaker/notify", icon: "Megaphone" },
   { label: "Messages", href: "/caretaker/messages", icon: "MessageSquare" },
 ];
 

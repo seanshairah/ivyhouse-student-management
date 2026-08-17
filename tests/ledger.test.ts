@@ -441,3 +441,111 @@ describe("credit is not left stranded", () => {
     expect(account.unallocatedCredit).toBe(0);
   });
 });
+
+describe("money handed to the caretaker settles what is already owed", () => {
+  // recordOfficePayment() is the desk-side path: the student's debt already
+  // exists on the ledger, so unlike a booking deposit it must NOT raise a new
+  // charge — it pays down the outstanding ones, oldest first, and issues a
+  // receipt for the cash.
+  it("pays down outstanding rent oldest-first and issues a receipt", async () => {
+    const { recordOfficePayment } = await import("@/core/billing/office-payment");
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — August",
+      amount: 120,
+      dueDate: daysFromNow(-10),
+    });
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — September",
+      amount: 120,
+      dueDate: daysFromNow(20),
+    });
+
+    const res = await recordOfficePayment({
+      studentProfileId: profileId,
+      amount: 150,
+    });
+    expect(res.allocated).toBe(150);
+    expect(res.credit).toBe(0);
+    expect(res.receiptNumber).toMatch(/^RCT-/);
+
+    const account = await getStudentAccount(profileId);
+    expect(account.rent.outstanding).toBe(90);
+
+    // No new charge appeared: total charged is still the two months.
+    const charges = await prisma.charge.findMany({
+      where: { studentProfileId: profileId },
+    });
+    expect(charges).toHaveLength(2);
+    const august = charges.find((c) => c.description.includes("August"));
+    expect(august?.status).toBe(ChargeStatus.SETTLED);
+  });
+
+  it("keeps overpayment as credit instead of refusing the cash", async () => {
+    const { recordOfficePayment } = await import("@/core/billing/office-payment");
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — August",
+      amount: 120,
+      dueDate: daysFromNow(-1),
+    });
+
+    const res = await recordOfficePayment({
+      studentProfileId: profileId,
+      amount: 200,
+    });
+    expect(res.allocated).toBe(120);
+    expect(res.credit).toBe(80);
+
+    const account = await getStudentAccount(profileId);
+    expect(account.rent.outstanding).toBe(0);
+    expect(account.unallocatedCredit).toBe(80);
+  });
+
+  it("clears its own category before spilling into another", async () => {
+    // Established allocation order: the payment's category first, then other
+    // outstanding debt oldest-first. Cash is never left idle while any debt
+    // stands — same rule every settlement path on the platform follows.
+    const { recordOfficePayment } = await import("@/core/billing/office-payment");
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.TRANSPORT,
+      description: "Transport — August",
+      amount: 15,
+      dueDate: daysFromNow(-30),
+    });
+    await raiseCharge({
+      studentProfileId: profileId,
+      category: ChargeCategory.RENT,
+      description: "Rent — September",
+      amount: 120,
+      dueDate: daysFromNow(-1),
+    });
+
+    // Transport is the OLDER debt, but a rent payment must hit rent first.
+    const res = await recordOfficePayment({
+      studentProfileId: profileId,
+      amount: 120,
+      category: ChargeCategory.RENT,
+    });
+    expect(res.allocated).toBe(120);
+
+    const account = await getStudentAccount(profileId);
+    expect(account.rent.outstanding).toBe(0);
+    expect(account.transport.outstanding).toBe(15);
+  });
+
+  it("refuses a zero or negative amount", async () => {
+    const { recordOfficePayment } = await import("@/core/billing/office-payment");
+    await expect(
+      recordOfficePayment({ studentProfileId: profileId, amount: 0 }),
+    ).rejects.toThrow();
+    await expect(
+      recordOfficePayment({ studentProfileId: profileId, amount: -50 }),
+    ).rejects.toThrow();
+  });
+});

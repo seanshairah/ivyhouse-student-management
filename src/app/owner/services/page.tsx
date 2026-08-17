@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/misc";
 import { ServiceBoard } from "@/components/owner/service-board";
+import { CaretakerLoginButton } from "@/components/owner/caretaker-login-button";
 import {
   CaretakerForm,
   CaretakerUpdateComposer,
@@ -102,9 +103,17 @@ export default async function OwnerServicesPage() {
                       <p>{c.phone}</p>
                       <p className="truncate">{c.email}</p>
                     </div>
-                    {c.house && (
-                      <Badge color="brand" className="mt-2">{c.house.name}</Badge>
-                    )}
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      {c.house ? (
+                        <Badge color="brand">{c.house.name}</Badge>
+                      ) : (
+                        <span />
+                      )}
+                      <CaretakerLoginButton
+                        caretakerId={c.id}
+                        hasLogin={Boolean(c.userId)}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
