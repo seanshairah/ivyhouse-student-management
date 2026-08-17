@@ -26,8 +26,7 @@ import { createStudentAccount } from "@/services/credentials";
  * charges first, and the import payment only covers the remainder. Without
  * this, a student who paid $480 through Paynow and appears as 480 on the
  * sheet would be credited twice — or their surviving gateway payment would
- * dangle as phantom "credit". On this platform that is not hypothetical:
- * real semester payments have settled through Paynow.
+ * dangle as phantom "credit".
  *
  * RESUMABLE BY DESIGN. Serverless gives an action a bounded slice of time,
  * and dozens of ledger rebuilds may not fit in one. Each student imports in
@@ -35,13 +34,11 @@ import { createStudentAccount } from "@/services/credentials";
  * reference + amount), so running again continues where the last run stopped
  * — and a finished import is a no-op. Re-uploading a CORRECTED sheet also
  * works: an amount change fails the check and that student is rebuilt.
- *
- * This file mirrors the sibling platform's engine; only the account-creation
- * call differs, because the platforms' student services diverged long ago.
  */
 
 export interface RosterRow {
-  room: number;
+  /** Room label as the sheet writes it — "7", "40", "A01". */
+  room: string;
   fullName: string;
   email: string | null;
   phone: string | null;
@@ -53,8 +50,19 @@ export interface RosterImportOptions {
   houseSlug: string;
   /** Deterministic payment-reference prefix; also the import's identity. */
   refPrefix: string;
-  monthlyPrice?: number;
-  roomCapacity?: number;
+  /**
+   * Beds per room label, straight off the sheet — a 3-sharing room lists
+   * three lines, an empty bed is a line with no name. Every room gets at
+   * least two beds: a lone entry means a roommate is missing from the book,
+   * not that the room is a single.
+   */
+  beds: Record<string, number>;
+  /**
+   * Monthly rent PER STUDENT by room size, chosen by the human at upload —
+   * e.g. { 2: 120 } or { 2: 135, 3: 105 }. Sharing three ways is cheaper per
+   * head, so the price is a property of the room size, not the house.
+   */
+  monthlyPriceByCapacity: Record<number, number>;
 }
 
 const MONTHS: Array<[string, string, string]> = [
@@ -93,16 +101,25 @@ export async function runRosterImport(
   opts: RosterImportOptions,
 ): Promise<RosterImportSummary> {
   if (!rows.length) throw new Error("The roster is empty.");
-  const monthly = opts.monthlyPrice ?? 120;
-  const capacity = opts.roomCapacity ?? 2;
-  const semesterTotal = monthly * MONTHS.length;
+
+  const capacityOf = (room: string) =>
+    Math.min(6, Math.max(2, opts.beds[room] ?? 2));
+  const monthlyOf = (room: string) => {
+    const price = opts.monthlyPriceByCapacity[capacityOf(room)];
+    if (!price || price <= 0) {
+      throw new Error(
+        `No monthly price set for ${capacityOf(room)}-sharing rooms (room ${room}).`,
+      );
+    }
+    return price;
+  };
+  for (const r of rows) monthlyOf(r.room); // fail before any write, not mid-import
 
   const house = await prisma.house.findUnique({ where: { slug: opts.houseSlug } });
   if (!house) throw new Error(`House "${opts.houseSlug}" not found.`);
 
   // ── Phase A: the building itself ─────────────────────────────
-  const maxRoom = Math.max(...rows.map((r) => r.room));
-  const wanted = Array.from({ length: maxRoom }, (_, i) => String(i + 1));
+  const wanted = [...new Set([...rows.map((r) => r.room), ...Object.keys(opts.beds)])].sort();
   await prisma.$transaction(
     async (tx) => {
       await tx.studentProfile.updateMany({
@@ -120,10 +137,11 @@ export async function runRosterImport(
         const existing = await tx.room.findFirst({
           where: { houseId: house.id, number },
         });
+        const cap = capacityOf(number);
         const data = {
-          type: RoomType.SHARED_DOUBLE,
-          capacity,
-          price: monthly,
+          type: cap >= 3 ? RoomType.SHARED_TRIPLE : RoomType.SHARED_DOUBLE,
+          capacity: cap,
+          price: monthlyOf(number),
           status: RoomStatus.OCCUPIED,
         };
         if (existing) {
@@ -150,29 +168,34 @@ export async function runRosterImport(
     paidInFull: 0, paidOneMonth: 0, partiallyPaid: 0, notPaid: 0,
     done: false,
   };
-  const roomSlot = new Map<number, number>();
+  const roomSlot = new Map<string, number>();
 
   for (const row of rows) {
     const slot = (roomSlot.get(row.room) ?? 0) + 1;
     roomSlot.set(row.room, slot);
-    const reference = `${opts.refPrefix}-R${String(row.room).padStart(2, "0")}-${String.fromCharCode(64 + Math.min(slot, 26))}`;
+    const reference = `${opts.refPrefix}-R${row.room.padStart(2, "0")}-${String.fromCharCode(64 + Math.min(slot, 26))}`;
     const email = (row.email ?? placeholderEmail(row.fullName)).toLowerCase();
-    const roomId = roomByNumber.get(String(row.room));
+    const roomId = roomByNumber.get(row.room);
     if (!roomId) throw new Error(`Room ${row.room} missing after phase A`);
 
-    if (row.credited >= semesterTotal) summary.paidInFull++;
+    const monthly = monthlyOf(row.room);
+    // Paid-in-full / paid-for-the-month / not-paid, judged against what THIS
+    // student's room costs. "Not paid" means under half a month — a bare
+    // booking amount, nothing that covers living there.
+    if (row.credited >= monthly * MONTHS.length) summary.paidInFull++;
     else if (row.credited === monthly) summary.paidOneMonth++;
-    else if (row.credited <= 30) summary.notPaid++;
+    else if (row.credited < monthly / 2) summary.notPaid++;
     else summary.partiallyPaid++;
 
-    // Find or create the account. This platform's routine places the student
-    // in the (single) house itself; room placement is ours to do after.
+    // Find or create the account.
     const user = await prisma.user.findUnique({
       where: { email },
       include: { studentProfile: true },
     });
     let profileId = user?.studentProfile?.id;
     if (!profileId) {
+      // This platform's account routine places the student in the (single)
+      // house itself; room placement happens in the rebuild below.
       const created = await createStudentAccount({
         fullName: row.fullName,
         email,
@@ -298,7 +321,7 @@ export async function runRosterImport(
       data: {
         occupied,
         status:
-          occupied >= capacity
+          occupied >= capacityOf(room.number)
             ? RoomStatus.OCCUPIED
             : occupied > 0
               ? RoomStatus.RESERVED

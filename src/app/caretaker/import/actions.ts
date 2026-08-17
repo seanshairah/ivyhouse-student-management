@@ -18,13 +18,18 @@ import { audit } from "@/services/audit";
  *
  * Step one parses the uploaded workbook and reports what WOULD happen —
  * who matches an existing account, who is new, who currently lives in the
- * house but is missing from the sheet. Nothing is written. Step two takes
- * the parsed rows back (the client round-trips them; the server re-validates)
- * and runs the same import engine the owner's curated August import uses.
+ * house but is missing from the sheet, and how everyone classifies (paid in
+ * full / paid the month / not paid) under the monthly prices the human chose.
+ * Nothing is written. Step two takes the parsed rows back (the client
+ * round-trips them; the server re-validates everything) and runs the same
+ * import engine as the curated roster imports.
  *
- * The sheet's content hash is the import's identity: the same file resumes
- * or no-ops, a corrected file rebuilds what changed.
+ * The import's identity is a hash of rows + beds + prices: the same file at
+ * the same prices resumes or no-ops; changing any of them rebuilds exactly
+ * the students affected.
  */
+
+const ROOM_RE = /^[A-Z]{0,3}-?\d{1,4}[A-Z]?$/;
 
 interface Scope {
   houseId: string;
@@ -48,21 +53,66 @@ async function importScope(): Promise<Scope> {
   return { houseId: house.id, houseSlug: house.slug, houseName: house.name };
 }
 
+function readPrices(formData: FormData): Record<number, number> {
+  const p2 = Number(formData.get("monthlyPrice2") || 0);
+  const p3 = Number(formData.get("monthlyPrice3") || 0);
+  const prices: Record<number, number> = {};
+  if (p2 >= 20 && p2 <= 500) prices[2] = p2;
+  if (p3 >= 20 && p3 <= 500) prices[3] = p3;
+  return prices;
+}
+
+function capacityOf(beds: Record<string, number>, room: string): number {
+  return Math.min(6, Math.max(2, beds[room] ?? 2));
+}
+
+function classify(
+  rows: RosterRow[],
+  beds: Record<string, number>,
+  prices: Record<number, number>,
+) {
+  const out = { paidInFull: 0, paidOneMonth: 0, partiallyPaid: 0, notPaid: 0 };
+  for (const r of rows) {
+    const monthly = prices[capacityOf(beds, r.room)];
+    if (!monthly) continue;
+    if (r.credited >= monthly * 4) out.paidInFull++;
+    else if (r.credited === monthly) out.paidOneMonth++;
+    else if (r.credited < monthly / 2) out.notPaid++;
+    else out.partiallyPaid++;
+  }
+  return out;
+}
+
+function sheetIdentity(
+  rows: RosterRow[],
+  beds: Record<string, number>,
+  prices: Record<number, number>,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ rows, beds, prices }))
+    .digest("hex")
+    .slice(0, 6)
+    .toUpperCase();
+}
+
 export interface RosterPreview {
   ok: boolean;
   error?: string;
   houseName?: string;
   rows?: RosterRow[];
   rowsJson?: string;
-  sheetKey?: string;
+  bedsJson?: string;
   warnings?: string[];
   moneyColumns?: string[];
   students?: number;
-  roomsOnSheet?: number;
+  roomsTwoShare?: number;
+  roomsThreeShare?: number;
+  needsThreeSharePrice?: boolean;
   matchesExisting?: number;
   newAccounts?: number;
   missingFromSheet?: string[];
   totalCredited?: number;
+  classification?: { paidInFull: number; paidOneMonth: number; partiallyPaid: number; notPaid: number };
 }
 
 export async function previewRosterUpload(
@@ -78,10 +128,16 @@ export async function previewRosterUpload(
       return { ok: false, error: "That file is over 2MB — a roster sheet shouldn't be." };
     }
     const parsed = parseRosterWorkbook(Buffer.from(await file.arrayBuffer()));
+    const prices = readPrices(formData);
+
+    const capacities = Object.keys(parsed.beds).map((room) =>
+      capacityOf(parsed.beds, room),
+    );
+    const roomsThreeShare = capacities.filter((c) => c >= 3).length;
+    const needsThreeSharePrice = roomsThreeShare > 0 && !prices[3];
 
     // Who already exists? Email first, exact (case-insensitive) name second.
     const existing = await prisma.studentProfile.findMany({
-      where: {},
       select: { fullName: true, email: true, houseId: true, status: true },
     });
     const byEmail = new Set(existing.map((e) => e.email.toLowerCase()));
@@ -109,23 +165,23 @@ export async function previewRosterUpload(
       )
       .map((e) => e.fullName);
 
-    const rowsJson = JSON.stringify(parsed.rows);
-    const sheetKey = createHash("sha256").update(rowsJson).digest("hex").slice(0, 6).toUpperCase();
-
     return {
       ok: true,
       houseName: scope.houseName,
       rows: parsed.rows.slice(0, 12),
-      rowsJson,
-      sheetKey,
+      rowsJson: JSON.stringify(parsed.rows),
+      bedsJson: JSON.stringify(parsed.beds),
       warnings: parsed.warnings,
       moneyColumns: parsed.moneyColumns,
       students: parsed.rows.length,
-      roomsOnSheet: new Set(parsed.rows.map((r) => r.room)).size,
+      roomsTwoShare: capacities.length - roomsThreeShare,
+      roomsThreeShare,
+      needsThreeSharePrice,
       matchesExisting: matches,
       newAccounts: parsed.rows.length - matches,
       missingFromSheet: missing,
       totalCredited: parsed.rows.reduce((s, r) => s + r.credited, 0),
+      classification: classify(parsed.rows, parsed.beds, prices),
     };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
@@ -148,11 +204,16 @@ export async function applyRosterUpload(
       return { ok: false, error: "Type IMPORT to confirm." };
     }
     const rowsJson = String(formData.get("rowsJson") || "");
-    if (!rowsJson) return { ok: false, error: "Upload and preview the sheet first." };
+    const bedsJson = String(formData.get("bedsJson") || "");
+    if (!rowsJson || !bedsJson) {
+      return { ok: false, error: "Upload and preview the sheet first." };
+    }
 
     let rows: RosterRow[];
+    let beds: Record<string, number>;
     try {
       rows = JSON.parse(rowsJson);
+      beds = JSON.parse(bedsJson);
     } catch {
       return { ok: false, error: "The previewed rows were corrupted — upload again." };
     }
@@ -160,9 +221,17 @@ export async function applyRosterUpload(
     if (!Array.isArray(rows) || rows.length === 0 || rows.length > 500) {
       return { ok: false, error: "The previewed rows look wrong — upload again." };
     }
+    if (typeof beds !== "object" || beds === null || Array.isArray(beds)) {
+      return { ok: false, error: "The previewed room list looks wrong — upload again." };
+    }
+    for (const [room, n] of Object.entries(beds)) {
+      if (!ROOM_RE.test(room) || !Number.isInteger(n) || (n as number) < 1 || (n as number) > 6) {
+        return { ok: false, error: "The previewed room list is invalid — upload again." };
+      }
+    }
     for (const r of rows) {
       if (
-        !Number.isInteger(r.room) || r.room <= 0 || r.room > 200 ||
+        typeof r.room !== "string" || !ROOM_RE.test(r.room) ||
         typeof r.fullName !== "string" || !r.fullName.trim() ||
         typeof r.credited !== "number" || r.credited < 0 || r.credited > 10000
       ) {
@@ -170,20 +239,26 @@ export async function applyRosterUpload(
       }
     }
 
-    const sheetKey = createHash("sha256")
-      .update(JSON.stringify(rows))
-      .digest("hex")
-      .slice(0, 6)
-      .toUpperCase();
+    const prices = readPrices(formData);
+    if (!prices[2]) {
+      return { ok: false, error: "Set the monthly rent for 2-sharing rooms." };
+    }
+    const needsThree = Object.keys(beds).some((room) => capacityOf(beds, room) >= 3);
+    if (needsThree && !prices[3]) {
+      return { ok: false, error: "This sheet has 3-sharing rooms — set their monthly rent too." };
+    }
 
+    const sheetKey = sheetIdentity(rows, beds, prices);
     const summary = await runRosterImport(rows, {
       houseSlug: scope.houseSlug,
       refPrefix: `SHT${sheetKey}`,
+      beds,
+      monthlyPriceByCapacity: prices,
     });
 
     await audit({
       action: "roster.sheet_imported",
-      metadata: { house: scope.houseSlug, sheetKey, ...summary },
+      metadata: { house: scope.houseSlug, sheetKey, prices, ...summary },
     });
 
     revalidatePath("/caretaker/students");

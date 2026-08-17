@@ -28,10 +28,20 @@ import {
   type RosterPreview,
 } from "@/app/caretaker/import/actions";
 
-export function RosterUploader({ houseName }: { houseName: string }) {
+export function RosterUploader({
+  houseName,
+  defaultPriceTwoShare,
+  defaultPriceThreeShare,
+}: {
+  houseName: string;
+  defaultPriceTwoShare: number;
+  defaultPriceThreeShare: number;
+}) {
   const [pending, startTransition] = useTransition();
   const [preview, setPreview] = useState<RosterPreview | null>(null);
   const [confirm, setConfirm] = useState("");
+  const [price2, setPrice2] = useState(String(defaultPriceTwoShare));
+  const [price3, setPrice3] = useState(String(defaultPriceThreeShare));
 
   function onPreview(fd: FormData) {
     startTransition(async () => {
@@ -66,27 +76,61 @@ export function RosterUploader({ houseName }: { houseName: string }) {
           </CardTitle>
           <CardDescription>
             An .xlsx with Room and Full Name columns; every other money column
-            is added up per student. Email and Phone columns are picked up when
-            present. Nothing is changed at this step.
+            is added up per student. A line with a room but no name counts as
+            an empty bed — that&apos;s how 3-sharing rooms and vacancies are
+            recognised. Email and Phone columns are picked up when present.
+            Nothing is changed at this step.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={onPreview} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="space-y-1.5">
-              <Label htmlFor="roster-file">Roster file</Label>
-              <Input
-                id="roster-file"
-                name="file"
-                type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                required
-                className="sm:w-80"
-              />
+          <form action={onPreview} className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="space-y-1.5">
+                <Label htmlFor="roster-file">Roster file</Label>
+                <Input
+                  id="roster-file"
+                  name="file"
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  required
+                  className="sm:w-80"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="price-2">Monthly rent — 2-sharing</Label>
+                <Input
+                  id="price-2"
+                  name="monthlyPrice2"
+                  type="number"
+                  min="20"
+                  max="500"
+                  value={price2}
+                  onChange={(e) => setPrice2(e.target.value)}
+                  className="sm:w-36"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="price-3">3-sharing</Label>
+                <Input
+                  id="price-3"
+                  name="monthlyPrice3"
+                  type="number"
+                  min="20"
+                  max="500"
+                  value={price3}
+                  onChange={(e) => setPrice3(e.target.value)}
+                  className="sm:w-28"
+                />
+              </div>
+              <Button type="submit" disabled={pending}>
+                {pending ? <Loader2 className="animate-spin" /> : <Upload />}
+                Check sheet
+              </Button>
             </div>
-            <Button type="submit" disabled={pending}>
-              {pending ? <Loader2 className="animate-spin" /> : <Upload />}
-              Check sheet
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              Per student, per month, including any booking amount that counts
+              toward the month. Balances are judged against these.
+            </p>
           </form>
         </CardContent>
       </Card>
@@ -100,21 +144,34 @@ export function RosterUploader({ houseName }: { houseName: string }) {
             </CardTitle>
             <CardDescription>
               Money columns read: {preview.moneyColumns?.join(", ") || "none"}.
+              {" "}Rooms: {preview.roomsTwoShare} two-sharing
+              {preview.roomsThreeShare ? ` + ${preview.roomsThreeShare} three-sharing` : ""}.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {preview.needsThreeSharePrice && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  This sheet has 3-sharing rooms but no 3-sharing rent was set —
+                  fill it in above and check the sheet again.
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
               <Stat label="Students" value={String(preview.students)} />
-              <Stat label="Rooms" value={String(preview.roomsOnSheet)} />
               <Stat label="Match existing" value={String(preview.matchesExisting)} />
               <Stat label="New accounts" value={String(preview.newAccounts)} />
+              <Stat label="Sheet total" value={formatCurrency(preview.totalCredited ?? 0)} />
             </div>
-            <p className="text-sm text-muted-foreground">
-              Total credited on the sheet:{" "}
-              <span className="font-semibold text-foreground">
-                {formatCurrency(preview.totalCredited ?? 0)}
-              </span>
-            </p>
+            {preview.classification && (
+              <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <Stat label="Paid in full" value={String(preview.classification.paidInFull)} tone="good" />
+                <Stat label="Paid the month" value={String(preview.classification.paidOneMonth)} tone="good" />
+                <Stat label="Part-paid" value={String(preview.classification.partiallyPaid)} tone="warn" />
+                <Stat label="Not paid" value={String(preview.classification.notPaid)} tone="bad" />
+              </div>
+            )}
 
             {(preview.missingFromSheet?.length ?? 0) > 0 && (
               <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
@@ -172,6 +229,9 @@ export function RosterUploader({ houseName }: { houseName: string }) {
 
             <form action={onApply} className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end">
               <input type="hidden" name="rowsJson" value={preview.rowsJson ?? ""} />
+              <input type="hidden" name="bedsJson" value={preview.bedsJson ?? ""} />
+              <input type="hidden" name="monthlyPrice2" value={price2} />
+              <input type="hidden" name="monthlyPrice3" value={price3} />
               <div className="space-y-1.5">
                 <Label htmlFor="roster-confirm">Type IMPORT to confirm</Label>
                 <Input
@@ -186,7 +246,11 @@ export function RosterUploader({ houseName }: { houseName: string }) {
               <Button
                 type="submit"
                 variant="brand"
-                disabled={pending || confirm.trim().toUpperCase() !== "IMPORT"}
+                disabled={
+                  pending ||
+                  preview.needsThreeSharePrice ||
+                  confirm.trim().toUpperCase() !== "IMPORT"
+                }
               >
                 {pending ? <Loader2 className="animate-spin" /> : <Upload />}
                 Import into {houseName}
@@ -195,7 +259,8 @@ export function RosterUploader({ houseName }: { houseName: string }) {
             <p className="text-xs text-muted-foreground">
               Safe to click again with the same file — a run that hits the time
               limit continues where it stopped, and a finished import changes
-              nothing.
+              nothing. Changing the sheet or the prices rebuilds exactly what
+              changed.
             </p>
           </CardContent>
         </Card>
@@ -204,11 +269,27 @@ export function RosterUploader({ houseName }: { houseName: string }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "good" | "warn" | "bad";
+}) {
+  const toneClass =
+    tone === "good"
+      ? "text-emerald-700"
+      : tone === "warn"
+        ? "text-amber-700"
+        : tone === "bad"
+          ? "text-rose-700"
+          : "";
   return (
     <div className="rounded-xl bg-muted/60 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="font-display text-xl font-bold">{value}</p>
+      <p className={`font-display text-xl font-bold ${toneClass}`}>{value}</p>
     </div>
   );
 }

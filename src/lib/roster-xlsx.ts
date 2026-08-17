@@ -11,26 +11,32 @@ import type { RosterRow } from "@/services/students/roster-import";
  *
  *  - the header row is the first row containing both a "room"-ish and a
  *    "name"-ish cell;
- *  - a data row is any row below it with a positive whole room number and a
- *    non-empty name — the totals rows fail the room test and fall away;
+ *  - room labels are strings, not numbers — one house numbers its rooms
+ *    1..40, the other 2..43 plus an A-wing (A01..A20);
+ *  - a row with a room label and NO name is a VACANT BED: it counts toward
+ *    the room's size (a 3-sharing room lists three lines) without creating a
+ *    student — which is also how empty rooms stay on the books;
  *  - every OTHER named column that isn't recognised as email/phone is treated
  *    as money and summed into `credited`, which is exactly how the owner
- *    reads their own book (and per the owner, the method split is not
- *    recorded anyway);
- *  - email/phone columns are picked up when present, so a richer sheet (the
- *    Ivy book is expected to carry emails) imports contacts too.
+ *    reads their own book;
+ *  - email/phone columns are picked up when present, so an enriched sheet
+ *    imports contacts too.
  *
  * Anything skipped or suspicious comes back as a warning — a silent parse is
- * how one mistyped row becomes eighty wrong ledgers.
+ * how one mistyped row becomes a hundred wrong ledgers.
  */
 
 export interface ParsedRoster {
   rows: RosterRow[];
+  /** Beds per room label — occupied and vacant lines both count. */
+  beds: Record<string, number>;
   warnings: string[];
   moneyColumns: string[];
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Up to three letters, then digits — covers "7", "40", "A01", "B12". */
+const ROOM_RE = /^[A-Za-z]{0,3}-?\d{1,4}[A-Za-z]?$/;
 
 function cellText(v: unknown): string {
   return v === null || v === undefined ? "" : String(v).trim();
@@ -81,24 +87,26 @@ export function parseRosterWorkbook(buf: Buffer | ArrayBuffer): ParsedRoster {
 
   const warnings: string[] = [];
   const rows: RosterRow[] = [];
-  const seen = new Map<string, number>();
+  const beds: Record<string, number> = {};
+  const seen = new Set<string>();
 
   for (let i = headerIdx + 1; i < grid.length; i++) {
     const r = grid[i] ?? [];
     const roomRaw = cellText(r[roomCol]);
     const name = cellText(r[nameCol]);
     if (!roomRaw && !name) continue;
-    const room = Number(roomRaw);
-    if (!Number.isInteger(room) || room <= 0) {
+    const room = roomRaw.toUpperCase();
+    if (!ROOM_RE.test(room)) {
       // Totals and expense rows land here by design; a named student with a
-      // broken room number is worth flagging.
-      if (name && !/total|salar|refund|cash in hand/i.test(name)) {
-        warnings.push(`Row ${i + 1}: "${name}" skipped — room "${roomRaw || "(blank)"}" is not a number.`);
+      // broken room label is worth flagging.
+      if (name && !/total|salar|refund|expense|cash in hand/i.test(name)) {
+        warnings.push(`Row ${i + 1}: "${name}" skipped — room "${roomRaw || "(blank)"}" doesn't look like a room label.`);
       }
       continue;
     }
     if (!name) {
-      warnings.push(`Row ${i + 1}: room ${room} has an amount but no name — skipped.`);
+      // A vacant bed: the room exists and has space, nobody lives in it.
+      beds[room] = (beds[room] ?? 0) + 1;
       continue;
     }
 
@@ -112,24 +120,28 @@ export function parseRosterWorkbook(buf: Buffer | ArrayBuffer): ParsedRoster {
 
     const key = `${room}|${name.toLowerCase()}`;
     if (seen.has(key)) {
-      warnings.push(`Row ${i + 1}: duplicate of "${name}" in room ${room} — skipped.`);
+      warnings.push(
+        `Row ${i + 1}: "${name}" appears twice in room ${room} — second entry skipped. ` +
+        `If these are two different people, correct the name and re-upload.`,
+      );
+      // The line still describes a bed in the room.
+      beds[room] = (beds[room] ?? 0) + 1;
       continue;
     }
-    seen.set(key, i);
+    seen.add(key);
+    beds[room] = (beds[room] ?? 0) + 1;
     rows.push({ room, fullName: name, email, phone, credited });
   }
 
   if (!rows.length) throw new Error("No student rows found under the header.");
 
-  // Occupancy sanity per room.
-  const perRoom = new Map<number, number>();
-  for (const r of rows) perRoom.set(r.room, (perRoom.get(r.room) ?? 0) + 1);
-  for (const [room, n] of [...perRoom.entries()].sort((a, b) => a[0] - b[0])) {
-    if (n > 2) warnings.push(`Room ${room} has ${n} students on the sheet (capacity is 2).`);
+  for (const [room, n] of Object.entries(beds).sort()) {
+    if (n > 3) warnings.push(`Room ${room} has ${n} lines on the sheet — check for a mistyped room label.`);
   }
 
   return {
     rows,
+    beds,
     warnings,
     moneyColumns: moneyCols.map((i) => headers[i]).filter(Boolean),
   };
