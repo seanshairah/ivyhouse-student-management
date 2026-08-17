@@ -126,3 +126,33 @@ describe("a mixed-capacity house imports with per-room-size pricing", () => {
     ).rejects.toThrow(/3-sharing/);
   });
 });
+
+describe("re-uploading a roster merges returning students instead of duplicating", () => {
+  it("a second placeholder-email import reuses the existing account by name", async () => {
+    const { runRosterImport } = await import("@/services/students/roster-import");
+    const slug = "dedupe-mixed-test";
+    await prisma.house.upsert({
+      where: { slug },
+      update: {},
+      create: {
+        name: "Dedupe Mixed Test", slug, description: "Fixture", location: "Test",
+        amenities: [], services: [], rules: [], safetyInfo: [],
+      },
+    });
+    const tag = Array.from({ length: 6 }, () =>
+      "abcdefghijklmnopqrstuvwxyz"[Math.floor(Math.random() * 26)]).join("");
+    const uniqueName = `Rufaro ${tag} Chikuni`;
+    await prisma.user.deleteMany({
+      where: { email: `rufaro.${tag}.chikuni@unknown.invalid` },
+    });
+    const rows = [{ room: "1", fullName: uniqueName, email: null, phone: null, credited: 135 }];
+    const opts = { houseSlug: slug, refPrefix: `MD1${tag.toUpperCase()}`, beds: { "1": 2 }, monthlyPriceByCapacity: { 2: 135 } };
+    const first = await runRosterImport(rows, opts);
+    expect(first.created).toBe(1);
+    const second = await runRosterImport(rows, { ...opts, refPrefix: `MD2${tag.toUpperCase()}` });
+    expect(second.created).toBe(0);
+    expect(second.updated).toBe(1);
+    const n = await prisma.studentProfile.count({ where: { house: { slug }, fullName: uniqueName } });
+    expect(n).toBe(1);
+  }, 60_000);
+});

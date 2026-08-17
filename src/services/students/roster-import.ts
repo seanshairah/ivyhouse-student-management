@@ -86,6 +86,18 @@ export interface RosterImportSummary {
   done: boolean;
 }
 
+/** Normalised name key for duplicate detection: lowercase, letters only, sorted tokens. */
+export function normaliseName(fullName: string): string {
+  return (fullName || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z ]/g, "")
+    .trim()
+    .split(/\s+/)
+    .sort()
+    .join(" ");
+}
+
 export function placeholderEmail(fullName: string): string {
   const slug = fullName
     .toLowerCase()
@@ -193,6 +205,16 @@ export async function runRosterImport(
       include: { studentProfile: true },
     });
     let profileId = user?.studentProfile?.id;
+    if (!profileId && email.endsWith("@unknown.invalid")) {
+      const key = normaliseName(row.fullName);
+      const sameName = (
+        await prisma.studentProfile.findMany({
+          where: { houseId: house.id },
+          select: { id: true, fullName: true },
+        })
+      ).filter((p) => normaliseName(p.fullName) === key);
+      if (sameName.length === 1) profileId = sameName[0].id;
+    }
     if (!profileId) {
       // This platform's account routine places the student in the (single)
       // house itself; room placement happens in the rebuild below.
