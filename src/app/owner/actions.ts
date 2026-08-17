@@ -31,8 +31,13 @@ import {
   ServiceRequestCategory,
   ServiceRequestPriority,
   ChargeCategory,
+  UserRole,
 } from "@prisma/client";
-import { generateReference } from "@/lib/utils";
+import { generateReference, generateTempPassword } from "@/lib/utils";
+import { hashPassword } from "@/lib/auth";
+import { sendTemplatedEmail } from "@/services/email";
+import { sendStatusSMS } from "@/services/sms";
+import { EMAIL_SUBJECTS } from "@/constants/messages";
 
 type ActionResult = { success: boolean; error?: string; message?: string };
 
@@ -825,6 +830,110 @@ export async function expireStalePaymentsAction(): Promise<ActionResult> {
       message: parts.length
         ? `${parts.join("; ")}.`.replace(/^./, (c) => c.toUpperCase())
         : "No payment requests needed clearing.",
+    };
+  } catch (e) {
+    return { success: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Give a caretaker a real login and send them the credentials.
+ *
+ * upsertCaretaker() records that a caretaker exists; this is the separate,
+ * deliberate step that lets them actually sign in. Separate on purpose — a
+ * groundskeeper on the contact list does not automatically need access to
+ * student balances and payment recording.
+ *
+ * Always rotates to a fresh temporary password (the stored one is hashed and
+ * cannot be re-sent), forces a change on first sign-in, and reports exactly
+ * which channels the credentials reached — an email that silently failed is
+ * how a caretaker ends up locked out with everyone believing otherwise.
+ */
+export async function provisionCaretakerLogin(
+  formData: FormData,
+): Promise<ActionResult> {
+  await requireRole("OWNER");
+  try {
+    const caretakerId = String(formData.get("caretakerId") || "");
+    const caretaker = await prisma.caretaker.findUnique({
+      where: { id: caretakerId },
+    });
+    if (!caretaker) return { success: false, error: "Caretaker not found." };
+    const email = caretaker.email.toLowerCase().trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      return {
+        success: false,
+        error: "This caretaker has no valid email — edit them first.",
+      };
+    }
+
+    const tempPassword = generateTempPassword();
+    const passwordHash = await hashPassword(tempPassword);
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    const user = existing
+      ? await prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            name: caretaker.name,
+            phone: caretaker.phone || undefined,
+            role: UserRole.CARETAKER,
+            isActive: true,
+            passwordHash,
+            mustChangePassword: true,
+          },
+        })
+      : await prisma.user.create({
+          data: {
+            email,
+            name: caretaker.name,
+            phone: caretaker.phone || null,
+            role: UserRole.CARETAKER,
+            passwordHash,
+            mustChangePassword: true,
+          },
+        });
+    await prisma.caretaker.update({
+      where: { id: caretaker.id },
+      data: { userId: user.id },
+    });
+
+    const base = (process.env.APP_URL || process.env.NEXTAUTH_URL || "").replace(/\/$/, "");
+    const data = {
+      studentName: caretaker.name,
+      email,
+      password: tempPassword,
+      loginUrl: `${base}/auth/login`,
+    };
+    const emailRes = await sendTemplatedEmail(
+      email,
+      EMAIL_SUBJECTS.credentialsIssued,
+      "credentialsIssued",
+      data,
+    ).catch(() => ({ ok: false }) as { ok: boolean });
+    let smsOk = false;
+    if (caretaker.phone) {
+      const r = await sendStatusSMS(caretaker.phone, "credentialsIssued", data).catch(
+        () => ({ ok: false }) as { ok: boolean },
+      );
+      smsOk = Boolean(r.ok);
+    }
+
+    await audit({
+      action: "caretaker.login_provisioned",
+      entityType: "Caretaker",
+      entityId: caretaker.id,
+      metadata: { email, emailSent: Boolean(emailRes.ok), smsSent: smsOk },
+    });
+
+    revalidatePath("/owner/services");
+    const channels = [
+      emailRes.ok ? "emailed" : "email FAILED",
+      caretaker.phone ? (smsOk ? "texted" : "SMS FAILED") : "no phone on file",
+    ].join(", ");
+    return {
+      success: true,
+      message: `${caretaker.name} can now sign in as caretaker. Credentials: ${channels}.`,
     };
   } catch (e) {
     return { success: false, error: (e as Error).message };
