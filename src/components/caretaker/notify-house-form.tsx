@@ -77,6 +77,10 @@ export function NotifyHouseForm({ studentCount }: { studentCount: number }) {
             <label className="flex items-center gap-2 text-sm">
               <Checkbox name="onlyOwing" /> Only students who still owe money
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox name="allowDuplicates" /> Send even to students who already
+              received this exact message
+            </label>
           </div>
           <Button type="submit" disabled={pending}>
             {pending ? <Loader2 className="animate-spin" /> : <Send />}

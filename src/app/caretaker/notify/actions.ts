@@ -68,7 +68,17 @@ export async function caretakerNotifyHouse(
     if (viaEmail) channels.push(NotificationChannel.EMAIL);
     if (viaSms) channels.push(NotificationChannel.SMS);
 
-    const res = await sendMessage({ channels, recipients, subject, body });
+    // Default ON: a broadcast that dies partway is resumed by clicking again,
+    // and nobody who already has the message gets it twice.
+    const skipAlreadySent = String(formData.get("allowDuplicates") || "") !== "on";
+    const res = await sendMessage({
+      channels,
+      recipients,
+      subject,
+      body,
+      senderId: session.userId,
+      skipAlreadySent,
+    });
 
     await audit({
       action: "caretaker.house_notified",
@@ -80,6 +90,7 @@ export async function caretakerNotifyHouse(
         emailSent: res.emailSent,
         smsSent: res.smsSent,
         failed: res.failed,
+        skipped: res.skipped,
       },
     });
 
@@ -88,6 +99,7 @@ export async function caretakerNotifyHouse(
       message:
         `Sent to ${recipients.length} student${recipients.length === 1 ? "" : "s"} — ` +
         `${res.emailSent} email${res.emailSent === 1 ? "" : "s"}, ${res.smsSent} SMS delivered` +
+        (res.skipped ? `, ${res.skipped} skipped (already had this message)` : "") +
         (res.failed ? `, ${res.failed} failed (logged for the owner)` : "") +
         ".",
     };
