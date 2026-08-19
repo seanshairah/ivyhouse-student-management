@@ -6,6 +6,7 @@ import {
   Megaphone,
   ArrowRight,
   FileText,
+  ClipboardList,
 } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
@@ -34,6 +35,10 @@ import {
   monthlyRentFor,
 } from "@/constants";
 import { PaymentStatus } from "@prisma/client";
+import {
+  missingProfileFields,
+  PROFILE_COMPLETION_PATH,
+} from "@/lib/profile-completeness";
 
 export default async function StudentHomePage() {
   const session = await requireRole("STUDENT");
@@ -78,6 +83,9 @@ export default async function StudentHomePage() {
     ]);
 
   const firstName = (profile?.fullName ?? session.name).split(" ")[0];
+  // Details the student can still fill in themselves (chiefly next of kin).
+  // Imported students skipped onboarding, so most have none on file.
+  const missingDetails = missingProfileFields(profile);
   // Only offer a number worth sending a prompt to. A seeded placeholder is
   // well-formed and unreachable, so pre-filling it makes the wrong number the
   // default and the payment fails as an unexplained "cancellation".
@@ -152,6 +160,31 @@ export default async function StudentHomePage() {
                   otherwise sits here as a payment in progress indefinitely. */}
               <CancelPaymentButton reference={pendingPayment.reference} size="default" />
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Complete-your-details banner. Shown until the student adds the
+          contact details only they can supply (next of kin). */}
+      {profile && missingDetails.length > 0 && (
+        <Card className="border-sky-200 bg-sky-50/60">
+          <CardContent className="flex flex-col items-start gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+                <ClipboardList className="size-5" />
+              </div>
+              <div>
+                <p className="font-semibold">Complete your profile</p>
+                <p className="text-sm text-muted-foreground">
+                  We&apos;re missing {missingDetails.join(", ")}. Please add{" "}
+                  {missingDetails.length === 1 ? "it" : "them"} so we can reach
+                  someone for you in an emergency.
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="outline" size="default">
+              <Link href={PROFILE_COMPLETION_PATH}>Complete now</Link>
+            </Button>
           </CardContent>
         </Card>
       )}
