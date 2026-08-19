@@ -37,7 +37,7 @@ export const platformConfig: PlatformConfig = {
       process.env.RESEND_FROM_EMAIL ??
       process.env.EMAIL_FROM ??
       "Ivy Properties <notifications@ivyproperties.co.zw>",
-    smsSenderId: process.env.SMSPOP_SENDER_ID ?? "IvyHouse",
+    smsSenderId: process.env.SMSPOP_SENDER_ID ?? "Ivyhouse",
   },
 
   billing: {
