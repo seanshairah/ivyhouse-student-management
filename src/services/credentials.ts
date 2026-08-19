@@ -7,9 +7,15 @@ import { sendTemplatedEmail } from "@/services/email";
 import { sendStatusSMS } from "@/services/sms";
 import { EMAIL_SUBJECTS } from "@/constants/messages";
 import { audit } from "@/services/audit";
+import { platform } from "@/core/platform";
 
-function loginUrl(): string {
-  const base = process.env.APP_URL || process.env.NEXTAUTH_URL || "";
+/**
+ * The sign-in link students are sent. Exported so the dashboard can show the
+ * owner exactly which URL is about to go out — a misconfigured APP_URL would
+ * otherwise mail everyone a link to localhost.
+ */
+export function loginUrl(): string {
+  const base = platform().appUrl || process.env.APP_URL || process.env.NEXTAUTH_URL || "";
   return `${base.replace(/\/$/, "")}/auth/login`;
 }
 
@@ -120,9 +126,21 @@ export interface CredentialSendResult {
  * is stamped only when at least one channel succeeds, so a fully-failed send
  * stays eligible for retry.
  */
+export interface CredentialSendOptions {
+  /**
+   * Which channels to deliver on. Defaults to both. Sending on one channel
+   * only is useful for a reminder run: students who never signed in have
+   * already been emailed, so a second email adds nothing an SMS would not.
+   */
+  channels?: { email?: boolean; sms?: boolean };
+}
+
 export async function sendStudentCredentials(
   studentProfileId: string,
+  options: CredentialSendOptions = {},
 ): Promise<CredentialSendResult> {
+  const wantEmail = options.channels?.email ?? true;
+  const wantSms = options.channels?.sms ?? true;
   const profile = await prisma.studentProfile.findUnique({
     where: { id: studentProfileId },
     include: { user: true },
@@ -148,15 +166,17 @@ export async function sendStudentCredentials(
     loginUrl: loginUrl(),
   };
 
-  const emailRes = await sendTemplatedEmail(
-    profile.email,
-    EMAIL_SUBJECTS.credentialsIssued,
-    "credentialsIssued",
-    data,
-  ).catch(() => ({ ok: false }) as { ok: boolean });
+  const emailRes = wantEmail
+    ? await sendTemplatedEmail(
+        profile.email,
+        EMAIL_SUBJECTS.credentialsIssued,
+        "credentialsIssued",
+        data,
+      ).catch(() => ({ ok: false }) as { ok: boolean })
+    : ({ ok: false } as { ok: boolean });
 
   let smsOk = false;
-  if (profile.phone) {
+  if (wantSms && profile.phone) {
     const smsRes = await sendStatusSMS(profile.phone, "credentialsIssued", data).catch(
       () => ({ ok: false }) as { ok: boolean },
     );
