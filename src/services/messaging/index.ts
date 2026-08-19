@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NotificationChannel, MessageStatus } from "@prisma/client";
 import { sendEmail } from "@/services/email";
-import { sendSMS } from "@/services/sms";
+import { sendSMS, normalizeZwPhone } from "@/services/sms";
 import { brandedEmail } from "@/services/email/templates";
 import { audit } from "@/services/audit";
 
@@ -86,6 +86,27 @@ export interface SendMessageInput {
   senderId?: string;
   relatedType?: string;
   relatedId?: string;
+  /**
+   * Skip anyone who already received this exact message on this channel.
+   *
+   * A broadcast to a whole house does not always survive one request — the
+   * run can die partway with no record of how far it got. Re-running then
+   * means texting the first half twice. With this on, a second click resumes
+   * instead of repeating, so "send again until it finishes" is safe.
+   */
+  skipAlreadySent?: boolean;
+  /** How far back a previous delivery counts as a duplicate. Default 7 days. */
+  dedupeWindowHours?: number;
+}
+
+/**
+ * Identity for duplicate detection. Phone numbers are compared as the network
+ * sees them, so "0771234567" and "+263 77 123 4567" are one person and not two.
+ */
+function dedupeKey(channel: NotificationChannel, recipient: string): string {
+  return channel === NotificationChannel.SMS
+    ? normalizeZwPhone(recipient)
+    : (recipient || "").trim().toLowerCase();
 }
 
 /** Send a message across channels and log every attempt. */
@@ -93,9 +114,39 @@ export async function sendMessage(input: SendMessageInput) {
   let emailSent = 0;
   let smsSent = 0;
   let failed = 0;
+  let skipped = 0;
+
+  // Who already has this message, so a resumed run does not send it twice.
+  const delivered = new Set<string>();
+  if (input.skipAlreadySent) {
+    const cutoff = new Date(
+      Date.now() - (input.dedupeWindowHours ?? 24 * 7) * 60 * 60 * 1000,
+    );
+    const prior = await prisma.messageLog.findMany({
+      where: {
+        body: input.body,
+        status: MessageStatus.SENT,
+        channel: { in: input.channels },
+        createdAt: { gte: cutoff },
+      },
+      select: { channel: true, recipient: true },
+    });
+    for (const p of prior) {
+      delivered.add(`${p.channel}:${dedupeKey(p.channel, p.recipient)}`);
+    }
+  }
+  const hasHad = (channel: NotificationChannel, to: string) =>
+    delivered.has(`${channel}:${dedupeKey(channel, to)}`);
+  // A recipient listed twice in one run is also a duplicate.
+  const markSent = (channel: NotificationChannel, to: string) =>
+    delivered.add(`${channel}:${dedupeKey(channel, to)}`);
 
   for (const r of input.recipients) {
-    if (input.channels.includes(NotificationChannel.EMAIL) && r.email) {
+    if (
+      input.channels.includes(NotificationChannel.EMAIL) &&
+      r.email &&
+      !(input.skipAlreadySent && hasHad(NotificationChannel.EMAIL, r.email))
+    ) {
       const html = brandedEmail({
         heading: input.subject || "A message from Ivy House",
         intro: `Hi ${r.name},`,
@@ -107,12 +158,26 @@ export async function sendMessage(input: SendMessageInput) {
         html,
       });
       await logMessage(input, r, NotificationChannel.EMAIL, res.ok, res.error);
-      res.ok ? emailSent++ : failed++;
+      if (res.ok) {
+        emailSent++;
+        markSent(NotificationChannel.EMAIL, r.email);
+      } else failed++;
+    } else if (input.skipAlreadySent && r.email && input.channels.includes(NotificationChannel.EMAIL)) {
+      skipped++;
     }
-    if (input.channels.includes(NotificationChannel.SMS) && r.phone) {
+    if (
+      input.channels.includes(NotificationChannel.SMS) &&
+      r.phone &&
+      !(input.skipAlreadySent && hasHad(NotificationChannel.SMS, r.phone))
+    ) {
       const res = await sendSMS(r.phone, input.body);
       await logMessage(input, r, NotificationChannel.SMS, res.ok, res.error);
-      res.ok ? smsSent++ : failed++;
+      if (res.ok) {
+        smsSent++;
+        markSent(NotificationChannel.SMS, r.phone);
+      } else failed++;
+    } else if (input.skipAlreadySent && r.phone && input.channels.includes(NotificationChannel.SMS)) {
+      skipped++;
     }
   }
 
@@ -125,10 +190,11 @@ export async function sendMessage(input: SendMessageInput) {
       emailSent,
       smsSent,
       failed,
+      skipped,
     },
   });
 
-  return { emailSent, smsSent, failed, total: input.recipients.length };
+  return { emailSent, smsSent, failed, skipped, total: input.recipients.length };
 }
 
 async function logMessage(
