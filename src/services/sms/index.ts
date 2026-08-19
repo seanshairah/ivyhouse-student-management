@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { MessageStatus } from "@prisma/client";
 import { renderTemplate } from "@/lib/utils";
 import { SMS_TEMPLATES } from "@/constants/messages";
+import { platform } from "@/core/platform";
 
 export interface SmsResult {
   ok: boolean;
@@ -35,11 +36,21 @@ export function normalizeZwPhone(phone: string): string {
   return p;
 }
 
+/**
+ * The sender name messages go out under. Sender IDs are registered per brand
+ * with the provider and are CASE-SENSITIVE — an unregistered spelling is
+ * rejected outright ("Invalid sender ID"), so the platform's approved value is
+ * the fallback rather than a guess.
+ */
+function smsSenderId(): string {
+  return process.env.SMSPOP_SENDER_ID || platform().senders.smsSenderId || "";
+}
+
 // ── SMS Pop adapter (https://smspop.co.zw) ────────────────────
 const smsPopProvider: SmsProvider = {
   name: "smspop",
   isConfigured() {
-    return Boolean(process.env.SMSPOP_API_KEY && process.env.SMSPOP_SENDER_ID);
+    return Boolean(process.env.SMSPOP_API_KEY && smsSenderId());
   },
   async send(to, body) {
     return this.sendBulk!([to], body);
@@ -58,7 +69,7 @@ const smsPopProvider: SmsProvider = {
         body: JSON.stringify({
           name: `SHM ${new Date().toISOString().slice(0, 16)}`,
           message: body,
-          sender_id: process.env.SMSPOP_SENDER_ID,
+          sender_id: smsSenderId(),
           contact_import_method: "manual",
           manual_contacts: contacts,
         }),
