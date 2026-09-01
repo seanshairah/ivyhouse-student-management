@@ -24,10 +24,47 @@ export interface EmailResult {
 // All outgoing email uses this sender. Set RESEND_FROM_EMAIL (or EMAIL_FROM) in
 // the environment to your verified-domain sender; the default is the verified
 // Ivy Properties address so real mail is deliverable even if the env var is unset.
-const EMAIL_FROM =
-  process.env.RESEND_FROM_EMAIL ||
-  process.env.EMAIL_FROM ||
-  "Ivy Properties <notifications@ivyproperties.co.zw>";
+const FALLBACK_FROM = "Ivy Properties <notifications@ivyproperties.co.zw>";
+
+/**
+ * Reserved top-level names that can never be a real public sending domain
+ * (RFC 2606 / RFC 6762). A from-address on one of these is always a
+ * misconfiguration, and the provider rejects every message sent from it.
+ */
+const UNUSABLE_TLDS = ["local", "localhost", "invalid", "test", "example", "internal"];
+
+/**
+ * True when an address cannot possibly deliver: malformed, or on a reserved
+ * domain. Worth checking because the cost of getting it wrong is silent and
+ * total — a deployment once carried EMAIL_FROM on `ivyhouse.local`, and every
+ * password reset and payment receipt was refused by the provider for weeks
+ * while the app reported nothing worse than a failed send.
+ */
+export function isUnusableFrom(from: string): boolean {
+  const addr = (from.match(/<([^>]+)>/)?.[1] ?? from).trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) return true;
+  const tld = addr.split("@")[1].split(".").pop() ?? "";
+  return UNUSABLE_TLDS.includes(tld);
+}
+
+/**
+ * The sender address. An explicitly configured value wins, as it must — but
+ * not when it is one no provider will accept, in which case the platform's
+ * own verified address is used instead and the misconfiguration is logged
+ * rather than silently swallowing the mail.
+ */
+function resolveFrom(): string {
+  const configured = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM;
+  if (!configured) return FALLBACK_FROM;
+  if (isUnusableFrom(configured)) {
+    console.warn(
+      `[email] EMAIL_FROM "${configured}" is not a deliverable address; ` +
+        `falling back to ${FALLBACK_FROM}. Fix the environment variable.`,
+    );
+    return FALLBACK_FROM;
+  }
+  return configured;
+}
 
 function resendConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY);
@@ -47,7 +84,7 @@ export async function sendWithResend(
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
     const { error } = await resend.emails.send({
-      from: EMAIL_FROM,
+      from: resolveFrom(),
       to: input.to,
       subject: input.subject,
       html: input.html,
@@ -74,7 +111,7 @@ export async function sendWithSMTP(
       auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     });
     await transport.sendMail({
-      from: EMAIL_FROM,
+      from: resolveFrom(),
       to: input.to,
       subject: input.subject,
       html: input.html,
